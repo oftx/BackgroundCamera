@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">BackgroundCamera</string>
+    <string name="notification_title">监控服务正在运行</string>
+    <string name="notification_text">正在后台定时拍照</string>
+    <string name="notification_channel_name">监控服务</string>
+    <string name="notification_channel_description">用于后台拍照服务的常驻通知</string>
+</resources>
