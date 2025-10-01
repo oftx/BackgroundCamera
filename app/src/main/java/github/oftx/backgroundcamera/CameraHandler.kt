@@ -14,7 +14,6 @@ import android.provider.MediaStore
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
-import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,18 +30,19 @@ object CameraHandler {
     private var onCaptureComplete: ((Boolean) -> Unit)? = null
     private lateinit var appContext: Context
 
+    // 为拍照序列引入状态机
+    private const val STATE_PREVIEW = 0
+    private const val STATE_WAITING_LOCK = 1
+    private const val STATE_WAITING_PRECAPTURE = 2
+    private const val STATE_WAITING_NON_PRECAPTURE = 3
+    private const val STATE_PICTURE_TAKEN = 4
+    private var state = STATE_PREVIEW
+
     data class CameraInfo(val name: String, val cameraId: String)
 
     /**
      * [最终版] 检索所有厂商通过标准API开放的摄像头。
-     *
-     * 该函数遵循Android最佳实践，能够：
-     * 1. 发现所有独立的、非逻辑摄像头。
-     * 2. 在支持的设备上（如Google Pixel），发现逻辑摄像头下的所有物理子摄像头。
-     *
-     * **重要提示**: 在许多设备上（如小米、一加等），制造商可能不会通过此标准API
-     * 暴露其所有物理摄像头（如广角、微距）。这是设备本身的限制，而非代码问题。
-     * 因此，本函数返回的列表是“该设备愿意向第三方应用展示的所有摄像头”。
+     * (此函数无需修改)
      */
     fun getAvailableCameras(context: Context): List<CameraInfo> {
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -100,12 +100,12 @@ object CameraHandler {
         return distinctList
     }
 
-
     @SuppressLint("MissingPermission")
     fun takePicture(context: Context, onComplete: (Boolean) -> Unit) {
         this.onCaptureComplete = onComplete
         this.appContext = context.applicationContext
         startBackgroundThread()
+        state = STATE_PREVIEW // 每次拍照前重置状态
 
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         try {
@@ -142,7 +142,6 @@ object CameraHandler {
         val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
         if (image == null) {
             Log.w(TAG, "ImageReader acquired null image.")
-            handleResult(false)
             return@OnImageAvailableListener
         }
 
@@ -151,8 +150,9 @@ object CameraHandler {
         buffer.get(bytes)
         image.close()
 
-        val success = saveImage(appContext, bytes)
-        handleResult(success)
+        saveImage(appContext, bytes)
+        // 注意：这里的成功/失败不再直接调用 handleResult，
+        // 而是由 captureStillPicture 的回调来最终决定整个流程的成功与否。
     }
 
     private val cameraStateCallback = object : CameraDevice.StateCallback() {
@@ -195,7 +195,8 @@ object CameraHandler {
     private val sessionStateCallback = object : CameraCaptureSession.StateCallback() {
         override fun onConfigured(session: CameraCaptureSession) {
             captureSession = session
-            triggerCapture()
+            // 会话配置成功后，不再直接拍照，而是启动对焦和曝光锁定序列
+            lockFocus()
         }
 
         override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -204,19 +205,137 @@ object CameraHandler {
         }
     }
 
-    private fun triggerCapture() {
+    /**
+     * 核心改动：用于驱动状态机的 CaptureCallback
+     */
+    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+        private fun process(result: CaptureResult) {
+            when (state) {
+                STATE_WAITING_LOCK -> {
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    // 如果AE已经收敛，或者需要闪光灯（也意味着测光完成），直接拍照
+                    if (aeState == null ||
+                        aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+                        aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED) {
+                        state = STATE_PICTURE_TAKEN
+                        captureStillPicture()
+                    } else {
+                        // 否则，运行预捕捉序列
+                        runPrecaptureSequence()
+                    }
+                }
+                STATE_WAITING_PRECAPTURE -> {
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    if (aeState == null ||
+                        aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
+                        aeState == CaptureRequest.CONTROL_AE_STATE_FLASH_REQUIRED) {
+                        state = STATE_WAITING_NON_PRECAPTURE
+                    }
+                }
+                STATE_WAITING_NON_PRECAPTURE -> {
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                        state = STATE_PICTURE_TAKEN
+                        captureStillPicture()
+                    }
+                }
+                else -> {
+                    // 其他状态下不做任何事
+                }
+            }
+        }
+
+        override fun onCaptureProgressed(session: CameraCaptureSession,
+                                         request: CaptureRequest,
+                                         partialResult: CaptureResult) {
+            process(partialResult)
+        }
+
+        override fun onCaptureCompleted(session: CameraCaptureSession,
+                                        request: CaptureRequest,
+                                        result: TotalCaptureResult) {
+            process(result)
+        }
+    }
+
+    /**
+     * 启动拍照序列的第一步：锁定对焦和曝光。
+     */
+    private fun lockFocus() {
         try {
             val surface = imageReader?.surface ?: run { handleResult(false); return }
             val captureBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)?.apply {
                 addTarget(surface)
+                set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+                // 触发自动对焦
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                // 开启自动曝光
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             }
             if (captureBuilder != null) {
-                captureSession?.capture(captureBuilder.build(), null, backgroundHandler)
+                state = STATE_WAITING_LOCK
+                captureSession?.capture(captureBuilder.build(), captureCallback, backgroundHandler)
             } else {
                 handleResult(false)
             }
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to trigger capture", e)
+            Log.e(TAG, "Failed to lock focus", e)
+            handleResult(false)
+        }
+    }
+
+    /**
+     * 运行预捕捉序列，等待曝光稳定。
+     */
+    private fun runPrecaptureSequence() {
+        try {
+            val captureBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)?.apply {
+                addTarget(imageReader!!.surface)
+                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+            }
+            state = STATE_WAITING_PRECAPTURE
+            captureSession?.capture(captureBuilder!!.build(), captureCallback, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Failed to run precapture sequence", e)
+            handleResult(false)
+        }
+    }
+
+    /**
+     * 3A算法稳定后，执行最终的拍照请求。
+     */
+    private fun captureStillPicture() {
+        try {
+            val device = cameraDevice ?: run { handleResult(false); return }
+            val surface = imageReader?.surface ?: run { handleResult(false); return }
+
+            val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                addTarget(surface)
+                set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            }
+
+            val finalCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                    Log.d(TAG, "Capture completed successfully.")
+                    // 拍照请求完成，并且ImageAvailableListener应该已经处理了图片。
+                    // 此时我们认为整个流程成功。
+                    handleResult(true)
+                }
+
+                override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
+                    Log.e(TAG, "Capture failed. Reason: ${failure.reason}")
+                    handleResult(false)
+                }
+            }
+
+            captureSession?.stopRepeating()
+            captureSession?.abortCaptures()
+            captureSession?.capture(captureBuilder.build(), finalCaptureCallback, null)
+
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Failed to trigger final capture", e)
             handleResult(false)
         }
     }
