@@ -34,8 +34,9 @@ object CameraHandler {
     private var onCaptureComplete: ((Boolean) -> Unit)? = null
     private lateinit var appContext: Context
 
-    // 新增：用于存储相机传感器的物理方向
     private var sensorOrientation: Int = 0
+    // 新增：用于存储摄像头的朝向（前置/后置）
+    private var lensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
 
     private const val STATE_PREVIEW = 0
     private const val STATE_WAITING_LOCK = 1
@@ -126,9 +127,10 @@ object CameraHandler {
             }
             Log.d(TAG, "Attempting to open camera ID: $cameraId")
 
-            // 新增：获取并存储传感器的方向
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             this.sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            this.lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+
 
             imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 1).apply {
                 setOnImageAvailableListener(imageAvailableListener, backgroundHandler)
@@ -312,11 +314,38 @@ object CameraHandler {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
 
-                // 核心修改：根据传感器方向和设备方向，计算并设置JPEG的最终方向
-                val deviceRotation = CameraService.currentDeviceRotation
-                val jpegOrientation = (sensorOrientation + deviceRotation + 270) % 360
-                set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
-                Log.d(TAG, "Sensor: $sensorOrientation, Device: $deviceRotation, Final JPEG orientation: $jpegOrientation")
+                // 核心修改：实现包含所有新需求的最终方向逻辑
+                val prefs = appContext.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val isAutoRotateEnabled = prefs.getBoolean(MainActivity.KEY_AUTO_ROTATE, true)
+
+                val finalJpegOrientation: Int
+
+                if (isAutoRotateEnabled) {
+                    // 自动校正逻辑
+                    val deviceRotation = CameraService.currentDeviceRotation
+                    // 修正公式：
+                    // 后置摄像头: (传感器方向 - 设备方向 + 360) % 360
+                    // 前置摄像头: (传感器方向 + 设备方向) % 360  (通常需要额外镜像处理，但旋转是这样的)
+                    finalJpegOrientation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                        (sensorOrientation + deviceRotation + 360) % 360
+                    } else { // 后置或外置
+                        (sensorOrientation - deviceRotation + 360) % 360
+                    }
+                    Log.d(TAG, "Auto-rotate ON. Sensor: $sensorOrientation, Device: $deviceRotation, Lens: $lensFacing -> Final JPEG orientation: $finalJpegOrientation")
+                } else {
+                    // 固定方向逻辑
+                    val forcedOrientation = prefs.getString(MainActivity.KEY_FORCED_ORIENTATION, MainActivity.VALUE_ORIENTATION_PORTRAIT)
+                    finalJpegOrientation = if (forcedOrientation == MainActivity.VALUE_ORIENTATION_PORTRAIT) {
+                        // 强制纵向。对于横向传感器(90或270)，需要旋转90度来变正。
+                        90
+                    } else { // landscape
+                        // 强制横向。对于横向传感器，不需要旋转。
+                        0
+                    }
+                    Log.d(TAG, "Auto-rotate OFF. Forced to: $forcedOrientation -> Final JPEG orientation: $finalJpegOrientation")
+                }
+
+                set(CaptureRequest.JPEG_ORIENTATION, finalJpegOrientation)
             }
 
             val finalCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -340,11 +369,6 @@ object CameraHandler {
             handleResult(false)
         }
     }
-
-    /**
-     * 删除：此方法不再需要，因为方向已在拍照时直接设置。
-     */
-    // private fun setExifOrientation(...) { ... }
 
     private fun saveImage(context: Context, bytes: ByteArray): Boolean {
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
@@ -372,8 +396,6 @@ object CameraHandler {
                 output.write(bytes)
                 Log.d(TAG, "Image saved to private dir: ${imageFile.absolutePath}")
             }
-            // 删除：不再需要手动设置EXIF
-            // setExifOrientation(context, imagePath = imageFile.absolutePath)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save private image", e)
@@ -409,8 +431,6 @@ object CameraHandler {
                     resolver.update(it, contentValues, null, null)
                 }
                 Log.d(TAG, "Image saved to public gallery: $it")
-                // 删除：不再需要手动设置EXIF
-                // setExifOrientation(context, imageUri = it)
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save public image", e)

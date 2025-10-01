@@ -98,6 +98,53 @@
             android:text="拍摄时显示提示 (Toast)"
             android:textSize="16sp"/>
 
+        <!-- 恢复：自动校正照片方向的开关 -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/auto_rotate_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="自动校正照片方向"
+            android:textSize="16sp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="根据拍摄时手机的姿态自动摆正照片。"
+            android:textSize="12sp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            />
+
+        <!-- 新增：固定方向设置 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="固定照片方向 (当自动校正关闭时):"
+            android:layout_marginTop="8dp"/>
+
+        <RadioGroup
+            android:id="@+id/forced_orientation_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/radio_force_portrait"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="保持纵向" />
+
+            <RadioButton
+                android:id="@+id/radio_force_landscape"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="保持横向" />
+        </RadioGroup>
+
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -18,6 +18,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.children
 import androidx.core.widget.doOnTextChanged
 import github.oftx.backgroundcamera.databinding.ActivityMainBinding
 
@@ -102,7 +103,29 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_SHOW_TOAST, isChecked).apply()
         }
 
-        // 删除：移除自动旋转开关的监听器
+        // 恢复：为自动旋转开关添加监听器
+        binding.autoRotateSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_AUTO_ROTATE, isChecked).apply()
+            // 新增：根据开关状态，启用或禁用固定方向的RadioGroup
+            updateForcedOrientationGroupState(isChecked)
+        }
+
+        // 新增：为固定方向RadioGroup添加监听器
+        binding.forcedOrientationGroup.setOnCheckedChangeListener { _, checkedId ->
+            val orientation = if (checkedId == R.id.radio_force_portrait) {
+                VALUE_ORIENTATION_PORTRAIT
+            } else {
+                VALUE_ORIENTATION_LANDSCAPE
+            }
+            prefs.edit().putString(KEY_FORCED_ORIENTATION, orientation).apply()
+        }
+    }
+
+    // 新增：一个辅助函数，用于更新RadioGroup的可用状态
+    private fun updateForcedOrientationGroupState(isAutoRotateEnabled: Boolean) {
+        binding.forcedOrientationGroup.children.forEach { view ->
+            view.isEnabled = !isAutoRotateEnabled
+        }
     }
 
     private fun setupCameraSpinner() {
@@ -135,7 +158,18 @@ class MainActivity : AppCompatActivity() {
         val showToast = prefs.getBoolean(KEY_SHOW_TOAST, true)
         binding.toastSwitch.isChecked = showToast
 
-        // 删除：移除加载自动旋转开关状态的逻辑
+        // 恢复：加载自动旋转开关的状态，默认为true
+        val autoRotate = prefs.getBoolean(KEY_AUTO_ROTATE, true)
+        binding.autoRotateSwitch.isChecked = autoRotate
+        // 新增：根据开关状态初始化RadioGroup的可用性
+        updateForcedOrientationGroupState(autoRotate)
+
+        // 新增：加载固定方向设置
+        val forcedOrientation = prefs.getString(KEY_FORCED_ORIENTATION, VALUE_ORIENTATION_PORTRAIT)
+        binding.forcedOrientationGroup.check(
+            if (forcedOrientation == VALUE_ORIENTATION_PORTRAIT) R.id.radio_force_portrait
+            else R.id.radio_force_landscape
+        )
 
         val savedCameraId = prefs.getString(KEY_SELECTED_CAMERA_ID, null)
         if (savedCameraId != null) {
@@ -226,8 +260,13 @@ class MainActivity : AppCompatActivity() {
         const val KEY_CAPTURE_INTERVAL = "capture_interval"
         const val KEY_SHOW_TOAST = "show_toast"
         const val KEY_SELECTED_CAMERA_ID = "selected_camera_id"
-        // 删除：自动旋转的 SharedPreferences Key
-        // const val KEY_AUTO_ROTATE = "auto_rotate"
+        // 恢复：自动旋转的 SharedPreferences Key
+        const val KEY_AUTO_ROTATE = "auto_rotate"
+        // 新增：固定方向的 SharedPreferences Key 和 Value
+        const val KEY_FORCED_ORIENTATION = "forced_orientation"
+        const val VALUE_ORIENTATION_PORTRAIT = "portrait"
+        const val VALUE_ORIENTATION_LANDSCAPE = "landscape"
+
         const val DEFAULT_INTERVAL_SECONDS = 30
     }
 }
