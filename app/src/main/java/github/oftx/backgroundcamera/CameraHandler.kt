@@ -35,7 +35,6 @@ object CameraHandler {
     private lateinit var appContext: Context
 
     private var sensorOrientation: Int = 0
-    // 新增：用于存储摄像头的朝向（前置/后置）
     private var lensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
 
     private const val STATE_PREVIEW = 0
@@ -314,33 +313,27 @@ object CameraHandler {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
 
-                // 核心修改：实现包含所有新需求的最终方向逻辑
                 val prefs = appContext.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
                 val isAutoRotateEnabled = prefs.getBoolean(MainActivity.KEY_AUTO_ROTATE, true)
 
                 val finalJpegOrientation: Int
 
                 if (isAutoRotateEnabled) {
-                    // 自动校正逻辑
                     val deviceRotation = CameraService.currentDeviceRotation
-                    // 修正公式：
-                    // 后置摄像头: (传感器方向 - 设备方向 + 360) % 360
-                    // 前置摄像头: (传感器方向 + 设备方向) % 360  (通常需要额外镜像处理，但旋转是这样的)
                     finalJpegOrientation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                        (sensorOrientation + deviceRotation + 360) % 360
-                    } else { // 后置或外置
                         (sensorOrientation - deviceRotation + 360) % 360
+                    } else { // 后置或外置
+                        (sensorOrientation + deviceRotation) % 360
                     }
                     Log.d(TAG, "Auto-rotate ON. Sensor: $sensorOrientation, Device: $deviceRotation, Lens: $lensFacing -> Final JPEG orientation: $finalJpegOrientation")
                 } else {
-                    // 固定方向逻辑
                     val forcedOrientation = prefs.getString(MainActivity.KEY_FORCED_ORIENTATION, MainActivity.VALUE_ORIENTATION_PORTRAIT)
-                    finalJpegOrientation = if (forcedOrientation == MainActivity.VALUE_ORIENTATION_PORTRAIT) {
-                        // 强制纵向。对于横向传感器(90或270)，需要旋转90度来变正。
-                        90
-                    } else { // landscape
-                        // 强制横向。对于横向传感器，不需要旋转。
-                        0
+                    finalJpegOrientation = when (forcedOrientation) {
+                        MainActivity.VALUE_ORIENTATION_PORTRAIT -> 90
+                        MainActivity.VALUE_ORIENTATION_PORTRAIT_REVERSED -> 270
+                        MainActivity.VALUE_ORIENTATION_LANDSCAPE -> 0
+                        MainActivity.VALUE_ORIENTATION_LANDSCAPE_REVERSED -> 180
+                        else -> 90 // 默认值
                     }
                     Log.d(TAG, "Auto-rotate OFF. Forced to: $forcedOrientation -> Final JPEG orientation: $finalJpegOrientation")
                 }

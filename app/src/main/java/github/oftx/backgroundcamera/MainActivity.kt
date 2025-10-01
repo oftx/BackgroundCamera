@@ -103,25 +103,24 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_SHOW_TOAST, isChecked).apply()
         }
 
-        // 恢复：为自动旋转开关添加监听器
         binding.autoRotateSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_AUTO_ROTATE, isChecked).apply()
-            // 新增：根据开关状态，启用或禁用固定方向的RadioGroup
             updateForcedOrientationGroupState(isChecked)
         }
 
-        // 新增：为固定方向RadioGroup添加监听器
+        // 修改：为新的4选项RadioGroup添加监听器
         binding.forcedOrientationGroup.setOnCheckedChangeListener { _, checkedId ->
-            val orientation = if (checkedId == R.id.radio_force_portrait) {
-                VALUE_ORIENTATION_PORTRAIT
-            } else {
-                VALUE_ORIENTATION_LANDSCAPE
+            val orientationValue = when (checkedId) {
+                R.id.radio_force_portrait -> VALUE_ORIENTATION_PORTRAIT
+                R.id.radio_force_portrait_reversed -> VALUE_ORIENTATION_PORTRAIT_REVERSED
+                R.id.radio_force_landscape -> VALUE_ORIENTATION_LANDSCAPE
+                R.id.radio_force_landscape_reversed -> VALUE_ORIENTATION_LANDSCAPE_REVERSED
+                else -> VALUE_ORIENTATION_PORTRAIT
             }
-            prefs.edit().putString(KEY_FORCED_ORIENTATION, orientation).apply()
+            prefs.edit().putString(KEY_FORCED_ORIENTATION, orientationValue).apply()
         }
     }
 
-    // 新增：一个辅助函数，用于更新RadioGroup的可用状态
     private fun updateForcedOrientationGroupState(isAutoRotateEnabled: Boolean) {
         binding.forcedOrientationGroup.children.forEach { view ->
             view.isEnabled = !isAutoRotateEnabled
@@ -158,18 +157,20 @@ class MainActivity : AppCompatActivity() {
         val showToast = prefs.getBoolean(KEY_SHOW_TOAST, true)
         binding.toastSwitch.isChecked = showToast
 
-        // 恢复：加载自动旋转开关的状态，默认为true
         val autoRotate = prefs.getBoolean(KEY_AUTO_ROTATE, true)
         binding.autoRotateSwitch.isChecked = autoRotate
-        // 新增：根据开关状态初始化RadioGroup的可用性
         updateForcedOrientationGroupState(autoRotate)
 
-        // 新增：加载固定方向设置
+        // 修改：加载并选中正确的固定方向
         val forcedOrientation = prefs.getString(KEY_FORCED_ORIENTATION, VALUE_ORIENTATION_PORTRAIT)
-        binding.forcedOrientationGroup.check(
-            if (forcedOrientation == VALUE_ORIENTATION_PORTRAIT) R.id.radio_force_portrait
-            else R.id.radio_force_landscape
-        )
+        val checkedId = when (forcedOrientation) {
+            VALUE_ORIENTATION_PORTRAIT -> R.id.radio_force_portrait
+            VALUE_ORIENTATION_PORTRAIT_REVERSED -> R.id.radio_force_portrait_reversed
+            VALUE_ORIENTATION_LANDSCAPE -> R.id.radio_force_landscape
+            VALUE_ORIENTATION_LANDSCAPE_REVERSED -> R.id.radio_force_landscape_reversed
+            else -> R.id.radio_force_portrait
+        }
+        binding.forcedOrientationGroup.check(checkedId)
 
         val savedCameraId = prefs.getString(KEY_SELECTED_CAMERA_ID, null)
         if (savedCameraId != null) {
@@ -260,12 +261,14 @@ class MainActivity : AppCompatActivity() {
         const val KEY_CAPTURE_INTERVAL = "capture_interval"
         const val KEY_SHOW_TOAST = "show_toast"
         const val KEY_SELECTED_CAMERA_ID = "selected_camera_id"
-        // 恢复：自动旋转的 SharedPreferences Key
         const val KEY_AUTO_ROTATE = "auto_rotate"
-        // 新增：固定方向的 SharedPreferences Key 和 Value
+
+        // 修改：为4个方向定义常量
         const val KEY_FORCED_ORIENTATION = "forced_orientation"
         const val VALUE_ORIENTATION_PORTRAIT = "portrait"
+        const val VALUE_ORIENTATION_PORTRAIT_REVERSED = "portrait_reversed"
         const val VALUE_ORIENTATION_LANDSCAPE = "landscape"
+        const val VALUE_ORIENTATION_LANDSCAPE_REVERSED = "landscape_reversed"
 
         const val DEFAULT_INTERVAL_SECONDS = 30
     }

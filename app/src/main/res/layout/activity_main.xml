@@ -98,7 +98,6 @@
             android:text="拍摄时显示提示 (Toast)"
             android:textSize="16sp"/>
 
-        <!-- 恢复：自动校正照片方向的开关 -->
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/auto_rotate_switch"
             android:layout_width="match_parent"
@@ -116,32 +115,42 @@
             android:paddingEnd="16dp"
             />
 
-        <!-- 新增：固定方向设置 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="固定照片方向 (当自动校正关闭时):"
             android:layout_marginTop="8dp"/>
 
+        <!-- 修改：使用新的4选项RadioGroup -->
         <RadioGroup
             android:id="@+id/forced_orientation_group"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:layout_height="wrap_content">
 
             <RadioButton
                 android:id="@+id/radio_force_portrait"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="保持纵向" />
+                android:text="纵向 (正常)" />
+
+            <RadioButton
+                android:id="@+id/radio_force_portrait_reversed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="纵向 (翻转)" />
 
             <RadioButton
                 android:id="@+id/radio_force_landscape"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="保持横向" />
+                android:text="横向 (右侧在上 🔄)" />
+
+            <RadioButton
+                android:id="@+id/radio_force_landscape_reversed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="横向 (左侧在上 🔁)" />
+
         </RadioGroup>
 
 
