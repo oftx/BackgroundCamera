@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        
+
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
         setupListeners()
@@ -78,27 +78,32 @@ class MainActivity : AppCompatActivity() {
         binding.viewPhotosButton.setOnClickListener {
             viewPhotos()
         }
-        
+
         binding.storageLocationGroup.setOnCheckedChangeListener { _, checkedId ->
             val isPublic = checkedId == R.id.radio_public_storage
             prefs.edit().putBoolean(KEY_STORAGE_IS_PUBLIC, isPublic).apply()
-            
+
             if (isPublic && !hasPermissions()) {
                 Toast.makeText(this, "公共目录需要存储权限", Toast.LENGTH_SHORT).show()
                 requestPermissionsLauncher.launch(this.permissions.toTypedArray())
             }
         }
-        
+
         binding.intervalEditText.doOnTextChanged { text, _, _, _ ->
             val interval = text.toString().toIntOrNull() ?: DEFAULT_INTERVAL_SECONDS
             prefs.edit().putInt(KEY_CAPTURE_INTERVAL, interval).apply()
+
+            // 如果服务正在运行，提示用户更改将在下一次生效
+            if (CameraService.isRunning) {
+                Toast.makeText(this, "间隔设置已更新，将在下一次拍照后生效", Toast.LENGTH_SHORT).show()
+            }
         }
-        
+
         binding.toastSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_SHOW_TOAST, isChecked).apply()
         }
     }
-    
+
     private fun setupCameraSpinner() {
         cameraList = CameraHandler.getAvailableCameras(this)
         val cameraNames = cameraList.map { it.name }
@@ -122,13 +127,13 @@ class MainActivity : AppCompatActivity() {
         binding.storageLocationGroup.check(
             if (isPublic) R.id.radio_public_storage else R.id.radio_private_storage
         )
-        
+
         val interval = prefs.getInt(KEY_CAPTURE_INTERVAL, DEFAULT_INTERVAL_SECONDS)
         binding.intervalEditText.setText(interval.toString())
-        
+
         val showToast = prefs.getBoolean(KEY_SHOW_TOAST, true)
         binding.toastSwitch.isChecked = showToast
-        
+
         val savedCameraId = prefs.getString(KEY_SELECTED_CAMERA_ID, null)
         if (savedCameraId != null) {
             val savedIndex = cameraList.indexOfFirst { it.cameraId == savedCameraId }
@@ -184,6 +189,7 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
         }
+        // 稍作延迟以等待服务状态更新
         binding.root.postDelayed({ updateUI() }, 200)
     }
 
@@ -201,6 +207,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 核心改动：移除了在服务运行时禁用UI控件的逻辑。
+     */
     private fun updateUI() {
         val isServiceRunning = CameraService.isRunning
         if (isServiceRunning) {
@@ -210,11 +219,12 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "服务已停止"
             binding.toggleServiceButton.text = "启动监控服务"
         }
-        binding.radioPublicStorage.isEnabled = !isServiceRunning
-        binding.radioPrivateStorage.isEnabled = !isServiceRunning
-        binding.intervalEditText.isEnabled = !isServiceRunning
-        binding.toastSwitch.isEnabled = !isServiceRunning
-        binding.cameraSpinner.isEnabled = !isServiceRunning
+        // 以下代码已被移除，以允许在服务运行时修改设置
+        // binding.radioPublicStorage.isEnabled = !isServiceRunning
+        // binding.radioPrivateStorage.isEnabled = !isServiceRunning
+        // binding.intervalEditText.isEnabled = !isServiceRunning
+        // binding.toastSwitch.isEnabled = !isServiceRunning
+        // binding.cameraSpinner.isEnabled = !isServiceRunning
     }
 
     companion object {
