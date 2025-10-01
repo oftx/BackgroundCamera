@@ -5,7 +5,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -16,6 +19,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Executors
 
 object CameraHandler {
 
@@ -30,7 +34,9 @@ object CameraHandler {
     private var onCaptureComplete: ((Boolean) -> Unit)? = null
     private lateinit var appContext: Context
 
-    // 为拍照序列引入状态机
+    // 新增：用于存储相机传感器的物理方向
+    private var sensorOrientation: Int = 0
+
     private const val STATE_PREVIEW = 0
     private const val STATE_WAITING_LOCK = 1
     private const val STATE_WAITING_PRECAPTURE = 2
@@ -40,10 +46,6 @@ object CameraHandler {
 
     data class CameraInfo(val name: String, val cameraId: String)
 
-    /**
-     * [最终版] 检索所有厂商通过标准API开放的摄像头。
-     * (此函数无需修改)
-     */
     fun getAvailableCameras(context: Context): List<CameraInfo> {
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val cameraList = mutableListOf<CameraInfo>()
@@ -65,7 +67,6 @@ object CameraHandler {
                     else -> "未知"
                 }
 
-                // 检查是否为逻辑摄像头 (需要 API 28+)
                 val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                     capabilities != null && capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)) {
@@ -74,7 +75,6 @@ object CameraHandler {
                     cameraList.add(logicalCamInfo)
                     Log.d(TAG, "Found Logical Camera: ${logicalCamInfo.name}. Checking for physical sub-cameras...")
 
-                    // 尝试获取其下的所有物理摄像头
                     val physicalCameraIds = characteristics.physicalCameraIds
                     if (physicalCameraIds.isEmpty()) {
                         Log.w(TAG, "Device reports it as a Logical Camera, but physical camera ID list is empty. Manufacturer restriction is likely.")
@@ -105,7 +105,7 @@ object CameraHandler {
         this.onCaptureComplete = onComplete
         this.appContext = context.applicationContext
         startBackgroundThread()
-        state = STATE_PREVIEW // 每次拍照前重置状态
+        state = STATE_PREVIEW
 
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         try {
@@ -126,13 +126,17 @@ object CameraHandler {
             }
             Log.d(TAG, "Attempting to open camera ID: $cameraId")
 
+            // 新增：获取并存储传感器的方向
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            this.sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+
             imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 1).apply {
                 setOnImageAvailableListener(imageAvailableListener, backgroundHandler)
             }
 
             cameraManager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
 
-        } catch (e: Exception) { // Catch broader exceptions during setup
+        } catch (e: Exception) {
             Log.e(TAG, "Exception during takePicture setup", e)
             handleResult(false)
         }
@@ -151,8 +155,6 @@ object CameraHandler {
         image.close()
 
         saveImage(appContext, bytes)
-        // 注意：这里的成功/失败不再直接调用 handleResult，
-        // 而是由 captureStillPicture 的回调来最终决定整个流程的成功与否。
     }
 
     private val cameraStateCallback = object : CameraDevice.StateCallback() {
@@ -185,17 +187,30 @@ object CameraHandler {
                 handleResult(false)
                 return
             }
-            cameraDevice?.createCaptureSession(listOf(surface), sessionStateCallback, backgroundHandler)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val outputConfiguration = OutputConfiguration(surface)
+                val sessionConfiguration = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    listOf(outputConfiguration),
+                    Executors.newSingleThreadExecutor(),
+                    sessionStateCallback
+                )
+                cameraDevice?.createCaptureSession(sessionConfiguration)
+            } else {
+                @Suppress("DEPRECATION")
+                cameraDevice?.createCaptureSession(listOf(surface), sessionStateCallback, backgroundHandler)
+            }
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to create capture session", e)
             handleResult(false)
         }
     }
 
+
     private val sessionStateCallback = object : CameraCaptureSession.StateCallback() {
         override fun onConfigured(session: CameraCaptureSession) {
             captureSession = session
-            // 会话配置成功后，不再直接拍照，而是启动对焦和曝光锁定序列
             lockFocus()
         }
 
@@ -205,22 +220,17 @@ object CameraHandler {
         }
     }
 
-    /**
-     * 核心改动：用于驱动状态机的 CaptureCallback
-     */
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         private fun process(result: CaptureResult) {
             when (state) {
                 STATE_WAITING_LOCK -> {
                     val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                    // 如果AE已经收敛，或者需要闪光灯（也意味着测光完成），直接拍照
                     if (aeState == null ||
                         aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
                         aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED) {
                         state = STATE_PICTURE_TAKEN
                         captureStillPicture()
                     } else {
-                        // 否则，运行预捕捉序列
                         runPrecaptureSequence()
                     }
                 }
@@ -239,9 +249,7 @@ object CameraHandler {
                         captureStillPicture()
                     }
                 }
-                else -> {
-                    // 其他状态下不做任何事
-                }
+                else -> {}
             }
         }
 
@@ -258,18 +266,13 @@ object CameraHandler {
         }
     }
 
-    /**
-     * 启动拍照序列的第一步：锁定对焦和曝光。
-     */
     private fun lockFocus() {
         try {
             val surface = imageReader?.surface ?: run { handleResult(false); return }
             val captureBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)?.apply {
                 addTarget(surface)
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-                // 触发自动对焦
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
-                // 开启自动曝光
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             }
             if (captureBuilder != null) {
@@ -284,9 +287,6 @@ object CameraHandler {
         }
     }
 
-    /**
-     * 运行预捕捉序列，等待曝光稳定。
-     */
     private fun runPrecaptureSequence() {
         try {
             val captureBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)?.apply {
@@ -301,9 +301,6 @@ object CameraHandler {
         }
     }
 
-    /**
-     * 3A算法稳定后，执行最终的拍照请求。
-     */
     private fun captureStillPicture() {
         try {
             val device = cameraDevice ?: run { handleResult(false); return }
@@ -314,13 +311,17 @@ object CameraHandler {
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+
+                // 核心修改：根据传感器方向和设备方向，计算并设置JPEG的最终方向
+                val deviceRotation = CameraService.currentDeviceRotation
+                val jpegOrientation = (sensorOrientation + deviceRotation + 270) % 360
+                set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+                Log.d(TAG, "Sensor: $sensorOrientation, Device: $deviceRotation, Final JPEG orientation: $jpegOrientation")
             }
 
             val finalCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
                     Log.d(TAG, "Capture completed successfully.")
-                    // 拍照请求完成，并且ImageAvailableListener应该已经处理了图片。
-                    // 此时我们认为整个流程成功。
                     handleResult(true)
                 }
 
@@ -339,6 +340,11 @@ object CameraHandler {
             handleResult(false)
         }
     }
+
+    /**
+     * 删除：此方法不再需要，因为方向已在拍照时直接设置。
+     */
+    // private fun setExifOrientation(...) { ... }
 
     private fun saveImage(context: Context, bytes: ByteArray): Boolean {
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
@@ -366,6 +372,8 @@ object CameraHandler {
                 output.write(bytes)
                 Log.d(TAG, "Image saved to private dir: ${imageFile.absolutePath}")
             }
+            // 删除：不再需要手动设置EXIF
+            // setExifOrientation(context, imagePath = imageFile.absolutePath)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save private image", e)
@@ -401,11 +409,13 @@ object CameraHandler {
                     resolver.update(it, contentValues, null, null)
                 }
                 Log.d(TAG, "Image saved to public gallery: $it")
+                // 删除：不再需要手动设置EXIF
+                // setExifOrientation(context, imageUri = it)
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save public image", e)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    resolver.delete(it, null, null) // Clean up pending entry on failure
+                    resolver.delete(it, null, null)
                 }
                 false
             }

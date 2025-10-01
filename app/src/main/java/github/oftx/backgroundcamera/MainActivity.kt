@@ -93,7 +93,6 @@ class MainActivity : AppCompatActivity() {
             val interval = text.toString().toIntOrNull() ?: DEFAULT_INTERVAL_SECONDS
             prefs.edit().putInt(KEY_CAPTURE_INTERVAL, interval).apply()
 
-            // 如果服务正在运行，提示用户更改将在下一次生效
             if (CameraService.isRunning) {
                 Toast.makeText(this, "间隔设置已更新，将在下一次拍照后生效", Toast.LENGTH_SHORT).show()
             }
@@ -102,6 +101,8 @@ class MainActivity : AppCompatActivity() {
         binding.toastSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_SHOW_TOAST, isChecked).apply()
         }
+
+        // 删除：移除自动旋转开关的监听器
     }
 
     private fun setupCameraSpinner() {
@@ -133,6 +134,8 @@ class MainActivity : AppCompatActivity() {
 
         val showToast = prefs.getBoolean(KEY_SHOW_TOAST, true)
         binding.toastSwitch.isChecked = showToast
+
+        // 删除：移除加载自动旋转开关状态的逻辑
 
         val savedCameraId = prefs.getString(KEY_SELECTED_CAMERA_ID, null)
         if (savedCameraId != null) {
@@ -189,7 +192,6 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
         }
-        // 稍作延迟以等待服务状态更新
         binding.root.postDelayed({ updateUI() }, 200)
     }
 
@@ -207,9 +209,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 核心改动：移除了在服务运行时禁用UI控件的逻辑。
-     */
     private fun updateUI() {
         val isServiceRunning = CameraService.isRunning
         if (isServiceRunning) {
@@ -219,12 +218,6 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "服务已停止"
             binding.toggleServiceButton.text = "启动监控服务"
         }
-        // 以下代码已被移除，以允许在服务运行时修改设置
-        // binding.radioPublicStorage.isEnabled = !isServiceRunning
-        // binding.radioPrivateStorage.isEnabled = !isServiceRunning
-        // binding.intervalEditText.isEnabled = !isServiceRunning
-        // binding.toastSwitch.isEnabled = !isServiceRunning
-        // binding.cameraSpinner.isEnabled = !isServiceRunning
     }
 
     companion object {
@@ -233,6 +226,8 @@ class MainActivity : AppCompatActivity() {
         const val KEY_CAPTURE_INTERVAL = "capture_interval"
         const val KEY_SHOW_TOAST = "show_toast"
         const val KEY_SELECTED_CAMERA_ID = "selected_camera_id"
+        // 删除：自动旋转的 SharedPreferences Key
+        // const val KEY_AUTO_ROTATE = "auto_rotate"
         const val DEFAULT_INTERVAL_SECONDS = 30
     }
 }
