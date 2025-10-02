@@ -44,6 +44,44 @@
             android:layout_width="match_parent"
             android:layout_height="1dp"
             android:background="?android:attr/listDivider"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="设备同步"
+            android:textSize="18sp"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:id="@+id/binding_status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="设备未绑定"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/bind_device_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="绑定到账户" />
+
+        <Button
+            android:id="@+id/logout_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:text="退出登录" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider"
             android:layout_marginTop="32dp"
             android:layout_marginBottom="16dp"/>
 
@@ -121,38 +159,15 @@
             android:text="固定照片方向 (当自动校正关闭时):"
             android:layout_marginTop="8dp"/>
 
-        <!-- 修改：使用新的4选项RadioGroup -->
         <RadioGroup
             android:id="@+id/forced_orientation_group"
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
-
-            <RadioButton
-                android:id="@+id/radio_force_portrait"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="纵向 (正常)" />
-
-            <RadioButton
-                android:id="@+id/radio_force_portrait_reversed"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="纵向 (翻转)" />
-
-            <RadioButton
-                android:id="@+id/radio_force_landscape"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="横向 (右侧在上 🔄)" />
-
-            <RadioButton
-                android:id="@+id/radio_force_landscape_reversed"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="横向 (左侧在上 🔁)" />
-
+            <RadioButton android:id="@+id/radio_force_portrait" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="纵向 (正常)" />
+            <RadioButton android:id="@+id/radio_force_portrait_reversed" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="纵向 (翻转)" />
+            <RadioButton android:id="@+id/radio_force_landscape" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="横向 (右侧在上 🔄)" />
+            <RadioButton android:id="@+id/radio_force_landscape_reversed" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="横向 (左侧在上 🔁)" />
         </RadioGroup>
-
 
         <TextView
             android:layout_width="match_parent"
@@ -164,18 +179,8 @@
             android:id="@+id/storage_location_group"
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
-
-            <RadioButton
-                android:id="@+id/radio_private_storage"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="应用专属目录 (卸载后删除)" />
-
-            <RadioButton
-                android:id="@+id/radio_public_storage"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="公共图库目录 (卸载后保留)" />
+            <RadioButton android:id="@+id/radio_private_storage" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="应用专属目录 (卸载后删除)" />
+            <RadioButton android:id="@+id/radio_public_storage" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="公共图库目录 (卸载后保留)" />
         </RadioGroup>
 
     </LinearLayout>

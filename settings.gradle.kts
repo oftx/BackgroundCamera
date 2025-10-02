@@ -16,9 +16,16 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // FIX: Add JitPack repository with explicit content filtering
+        maven {
+            url = uri("https://jitpack.io")
+            content {
+                // This tells Gradle to only look for dependencies from "com.github" here
+                includeGroupByRegex("com\\.github.*")
+            }
+        }
     }
 }
 
 rootProject.name = "BackgroundCamera"
 include(":app")
- 

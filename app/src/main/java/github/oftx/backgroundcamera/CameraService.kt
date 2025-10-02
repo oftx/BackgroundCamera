@@ -1,38 +1,37 @@
 package github.oftx.backgroundcamera
 
-import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
+import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import android.os.IBinder
-import android.os.SystemClock
+import android.os.*
 import android.util.Log
 import android.view.OrientationEventListener
 import androidx.core.app.NotificationCompat
+import github.oftx.backgroundcamera.network.dto.CommandPayload
+import github.oftx.backgroundcamera.network.dto.DeviceStatus
+import github.oftx.backgroundcamera.network.dto.DeviceStatusUpdate
+import github.oftx.backgroundcamera.util.SessionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class CameraService : Service() {
 
     private lateinit var alarmManager: AlarmManager
     private lateinit var alarmIntent: PendingIntent
-
     private lateinit var orientationEventListener: OrientationEventListener
+    private lateinit var sessionManager: SessionManager
+    private var webSocketManager: WebSocketManager? = null
 
     companion object {
         const val NOTIFICATION_ID = 101
         const val CHANNEL_ID = "CameraServiceChannel"
         const val ALARM_REQUEST_CODE = 102
+        const val ACTION_SETTINGS_UPDATED = "ACTION_SETTINGS_UPDATED"
 
         @Volatile
         var isRunning = false
 
-        /**
-         * 修改：不再存储EXIF常量，而是存储设备当前的物理旋转角度。
-         * 这个值将被CameraHandler用来计算最终的照片方向。
-         */
         @Volatile
         var currentDeviceRotation: Int = 0
     }
@@ -40,52 +39,111 @@ class CameraService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        sessionManager = SessionManager(this)
         Log.d("CameraService", "Service Created")
+
+        setupWebSocket()
 
         orientationEventListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(orientation: Int) {
                 if (orientation == ORIENTATION_UNKNOWN) return
-
-                // 修改：根据设备物理角度，计算出标准的0, 90, 180, 270度旋转值
-                val rotation = when {
+                currentDeviceRotation = when {
                     orientation >= 315 || orientation < 45 -> 0
                     orientation >= 45 && orientation < 135 -> 90
                     orientation >= 135 && orientation < 225 -> 180
                     orientation >= 225 && orientation < 315 -> 270
                     else -> 0
                 }
-                currentDeviceRotation = rotation
             }
         }
         if (orientationEventListener.canDetectOrientation()) {
             orientationEventListener.enable()
-            Log.d("CameraService", "OrientationEventListener enabled.")
+        }
+    }
+
+    private fun setupWebSocket() {
+        val deviceId = sessionManager.getDeviceId()
+        if (sessionManager.isDeviceBound()) {
+            webSocketManager?.disconnect()
+            webSocketManager = WebSocketManager(deviceId) { command: CommandPayload ->
+                handleRemoteCommand(command.command)
+            }
+            webSocketManager?.connect()
         } else {
-            Log.w("CameraService", "Cannot detect orientation.")
+            Log.w("CameraService", "Device is not bound, WebSocket will not connect.")
+        }
+    }
+
+    private fun handleRemoteCommand(command: String) {
+        when (command) {
+            "take_picture" -> {
+                Log.i("CameraService", "Received remote command to take picture.")
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                val wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "BackgroundCamera::RemoteCommandWakeLock"
+                )
+                wakeLock.acquire(20 * 1000L)
+
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        CaptureManager.performCapture(this@CameraService)
+                    } finally {
+                        wakeLock.release()
+                    }
+                }
+            }
+
+            else -> Log.w("CameraService", "Unknown remote command: $command")
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("CameraService", "Service Started")
+        Log.d("CameraService", "Service Started with action: ${intent?.action}")
+
+        if (intent?.action == ACTION_SETTINGS_UPDATED) {
+            if (sessionManager.isDeviceBound() && webSocketManager == null) {
+                setupWebSocket()
+            }
+            sendStatusUpdate()
+            return START_STICKY
+        }
+
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_text))
             .setSmallIcon(R.drawable.ic_camera_notification)
             .build()
-
         startForeground(NOTIFICATION_ID, notification)
 
         scheduleNextCapture()
+        sendStatusUpdate()
 
         return START_STICKY
+    }
+
+    private fun sendStatusUpdate() {
+        val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val status = DeviceStatus(
+            isServiceRunning = isRunning,
+            captureInterval = prefs.getInt(
+                MainActivity.KEY_CAPTURE_INTERVAL,
+                MainActivity.DEFAULT_INTERVAL_SECONDS
+            ),
+            selectedCameraId = prefs.getString(MainActivity.KEY_SELECTED_CAMERA_ID, null)
+        )
+        val statusUpdate = DeviceStatusUpdate(sessionManager.getDeviceId(), status)
+        webSocketManager?.sendStatusUpdate(statusUpdate)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cancelAlarm()
+        webSocketManager?.disconnect()
         orientationEventListener.disable()
         isRunning = false
+        sendStatusUpdate()
         Log.d("CameraService", "Service Destroyed")
     }
 
@@ -135,15 +193,12 @@ class CameraService : Service() {
                 CHANNEL_ID,
                 getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = getString(R.string.notification_channel_description)
-            }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                serviceChannel
+            )
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 }
