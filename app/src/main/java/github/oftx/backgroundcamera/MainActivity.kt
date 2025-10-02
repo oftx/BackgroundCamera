@@ -1,6 +1,7 @@
 package github.oftx.backgroundcamera
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -11,6 +12,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -21,11 +23,15 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.children
 import androidx.core.widget.doOnTextChanged
 import androidx.lifecycle.lifecycleScope
+import com.google.gson.Gson
 import github.oftx.backgroundcamera.databinding.ActivityMainBinding
 import github.oftx.backgroundcamera.network.ApiService
 import github.oftx.backgroundcamera.network.RetrofitClient
+import github.oftx.backgroundcamera.network.dto.ErrorResponseDto
+import github.oftx.backgroundcamera.util.LogManager
 import github.oftx.backgroundcamera.util.SessionManager
 import kotlinx.coroutines.launch
+import retrofit2.Response
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,8 +39,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var sessionManager: SessionManager
     private val apiService: ApiService by lazy { RetrofitClient.apiService }
+    private val gson = Gson()
 
     private var cameraList: List<CameraHandler.CameraInfo> = emptyList()
+
+    // FIX: Launcher to get result from LoginActivity
+    private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            LogManager.addLog("[UI] Returned from successful login. Refreshing UI.")
+            // Login was successful, refresh the UI to show logged-in state
+            updateUI()
+        }
+    }
 
     private val permissions = mutableListOf(Manifest.permission.CAMERA).apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -57,16 +73,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // FIX: No longer redirects. Initialize session manager and UI.
         sessionManager = SessionManager(this)
-        if (!sessionManager.isLoggedIn()) {
-            redirectToLogin()
-            return
-        }
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        LogManager.addLog("[UI] MainActivity created.")
 
         setupListeners()
         setupCameraSpinner()
@@ -75,14 +89,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::binding.isInitialized) { // Check if UI is initialized
-            updateUI()
-        }
-    }
-
-    private fun redirectToLogin() {
-        startActivity(Intent(this, LoginActivity::class.java))
-        finish()
+        updateUI()
     }
 
     private fun setupListeners() {
@@ -90,7 +97,7 @@ class MainActivity : AppCompatActivity() {
             if (hasPermissions()) {
                 toggleService()
             } else {
-                requestPermissionsLauncher.launch(this.permissions.toTypedArray())
+                requestPermissionsLauncher.launch(permissions.toTypedArray())
             }
         }
 
@@ -102,52 +109,69 @@ class MainActivity : AppCompatActivity() {
             viewPhotos()
         }
 
-        binding.bindDeviceButton.setOnClickListener {
-            bindDevice()
+        binding.viewLogsButton.setOnClickListener {
+            startActivity(Intent(this, LogActivity::class.java))
+        }
+
+        // FIX: New logic for the account action button
+        binding.accountActionButton.setOnClickListener {
+            if (sessionManager.isLoggedIn()) {
+                if (!sessionManager.isDeviceBound()) {
+                    // Logged in but not bound -> perform bind
+                    bindDevice()
+                }
+                // If already bound, the button is disabled, so no action
+            } else {
+                // Not logged in -> launch login activity
+                loginLauncher.launch(Intent(this, LoginActivity::class.java))
+            }
         }
 
         binding.logoutButton.setOnClickListener {
+            LogManager.addLog("[Auth] User logged out.")
             sessionManager.logout()
-            // Stop service if it's running
             if (CameraService.isRunning) {
-                stopService(Intent(this, CameraService::class.java))
+                // Restart service to disconnect WebSocket
+                restartService()
             }
-            redirectToLogin()
+            updateUI()
         }
 
+        // ... other listeners remain the same
         binding.storageLocationGroup.setOnCheckedChangeListener { _, checkedId ->
             val isPublic = checkedId == R.id.radio_public_storage
             prefs.edit().putBoolean(KEY_STORAGE_IS_PUBLIC, isPublic).apply()
-
             if (isPublic && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && !hasPermissions()) {
                 Toast.makeText(this, "公共目录需要存储权限", Toast.LENGTH_SHORT).show()
-                requestPermissionsLauncher.launch(this.permissions.toTypedArray())
+                requestPermissionsLauncher.launch(permissions.toTypedArray())
             }
             notifyServiceOfSettingsChange()
         }
-
         binding.intervalEditText.doOnTextChanged { text, _, _, _ ->
             val interval = text.toString().toIntOrNull() ?: DEFAULT_INTERVAL_SECONDS
             prefs.edit().putInt(KEY_CAPTURE_INTERVAL, interval).apply()
             notifyServiceOfSettingsChange()
         }
-
         binding.toastSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_SHOW_TOAST, isChecked).apply()
             notifyServiceOfSettingsChange()
         }
-
         binding.autoRotateSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_AUTO_ROTATE, isChecked).apply()
             updateForcedOrientationGroupState(isChecked)
             notifyServiceOfSettingsChange()
         }
-
-        binding.forcedOrientationGroup.setOnCheckedChangeListener { _, _ ->
-            // Save is handled inside the listener
+        binding.forcedOrientationGroup.setOnCheckedChangeListener { _, checkedId ->
+            val orientationValue = when (checkedId) {
+                R.id.radio_force_portrait -> VALUE_ORIENTATION_PORTRAIT
+                R.id.radio_force_portrait_reversed -> VALUE_ORIENTATION_PORTRAIT_REVERSED
+                R.id.radio_force_landscape -> VALUE_ORIENTATION_LANDSCAPE
+                R.id.radio_force_landscape_reversed -> VALUE_ORIENTATION_LANDSCAPE_REVERSED
+                else -> VALUE_ORIENTATION_PORTRAIT
+            }
+            prefs.edit().putString(KEY_FORCED_ORIENTATION, orientationValue).apply()
             notifyServiceOfSettingsChange()
         }
-
         binding.cameraSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (cameraList.isNotEmpty()) {
@@ -162,13 +186,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindDevice() {
         val deviceId = sessionManager.getDeviceId()
-        val jwt = sessionManager.getUserJwt()
-
-        if (jwt == null) {
-            Toast.makeText(this, "Session expired. Please log in again.", Toast.LENGTH_SHORT).show()
-            redirectToLogin()
-            return
-        }
+        val jwt = sessionManager.getUserJwt()!! // We know user is logged in if this is called
 
         lifecycleScope.launch {
             try {
@@ -176,18 +194,33 @@ class MainActivity : AppCompatActivity() {
                 if (response.isSuccessful && response.body() != null) {
                     val authToken = response.body()!!.authToken
                     sessionManager.saveDeviceBinding(authToken)
+                    LogManager.addLog("[Binding] Device bound successfully!")
                     Toast.makeText(this@MainActivity, "Device bound successfully!", Toast.LENGTH_SHORT).show()
                     updateUI()
-                    // If service is running, restart it to connect websocket
                     if (CameraService.isRunning) {
                         restartService()
                     }
                 } else {
-                     Toast.makeText(this@MainActivity, "Binding failed: \${response.code()} - \${response.message()}", Toast.LENGTH_LONG).show()
+                    val errorMsg = parseError(response)
+                    LogManager.addLog("[Binding] Binding failed: $errorMsg")
+                    Toast.makeText(this@MainActivity, "Binding failed: $errorMsg", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, "An error occurred: \${e.message}", Toast.LENGTH_LONG).show()
+                Log.e("MainActivity", "Binding exception", e)
+                val errorMsg = "Network error: ${e.localizedMessage}"
+                LogManager.addLog("[Binding] Binding failed: $errorMsg")
+                Toast.makeText(this@MainActivity, "An error occurred: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    private fun parseError(response: Response<*>): String {
+        return try {
+            val errorBody = response.errorBody()?.string()
+            val errorResponse = gson.fromJson(errorBody, ErrorResponseDto::class.java)
+            errorResponse.message ?: "An unknown error occurred."
+        } catch (e: Exception) {
+            "${response.code()} - ${response.message()}"
         }
     }
 
@@ -204,30 +237,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // FIX: This function now handles all 3 states
     private fun updateUI() {
+        // Service status
         val isServiceRunning = CameraService.isRunning
-        if (isServiceRunning) {
-            binding.statusText.text = "服务正在运行"
-            binding.toggleServiceButton.text = "停止监控服务"
-        } else {
-            binding.statusText.text = "服务已停止"
-            binding.toggleServiceButton.text = "启动监控服务"
-        }
+        binding.statusText.text = if (isServiceRunning) "服务正在运行" else "服务已停止"
+        binding.toggleServiceButton.text = if (isServiceRunning) "停止监控服务" else "启动监控服务"
 
-        if (sessionManager.isDeviceBound()) {
-            binding.bindingStatusText.text = "已绑定到: \${sessionManager.getUsername()}"
-            binding.bindDeviceButton.isEnabled = false
-            binding.bindDeviceButton.text = "已绑定"
+        // Account & Binding Status
+        if (sessionManager.isLoggedIn()) {
+            binding.logoutButton.visibility = View.VISIBLE
+            if (sessionManager.isDeviceBound()) {
+                binding.bindingStatusText.text = "已同步到: ${sessionManager.getUsername()}"
+                binding.accountActionButton.text = "已绑定"
+                binding.accountActionButton.isEnabled = false
+            } else {
+                binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
+                binding.accountActionButton.text = "绑定此设备"
+                binding.accountActionButton.isEnabled = true
+            }
         } else {
-            binding.bindingStatusText.text = "设备未绑定"
-            binding.bindDeviceButton.isEnabled = true
-            binding.bindDeviceButton.text = "绑定到账户"
+            binding.logoutButton.visibility = View.GONE
+            binding.bindingStatusText.text = "登录以同步和远程控制"
+            binding.accountActionButton.text = "登录 / 注册"
+            binding.accountActionButton.isEnabled = true
         }
     }
 
     private fun restartService() {
         stopService(Intent(this, CameraService::class.java))
-        // Give it a moment to fully stop before restarting
         binding.root.postDelayed({
             val serviceIntent = Intent(this, CameraService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -237,8 +275,8 @@ class MainActivity : AppCompatActivity() {
             }
         }, 500)
     }
-    
-    // Unchanged Methods below
+
+    // ... Other helper methods (setupCameraSpinner, loadPreferences, etc.) remain unchanged
     private fun setupCameraSpinner() {
         cameraList = CameraHandler.getAvailableCameras(this)
         val cameraNames = cameraList.map { it.name }
@@ -254,7 +292,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun loadPreferences() {
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         binding.storageLocationGroup.check(if (isPublic) R.id.radio_public_storage else R.id.radio_private_storage)
@@ -277,22 +314,18 @@ class MainActivity : AppCompatActivity() {
             else -> R.id.radio_force_portrait
         })
     }
-    
     private fun updateForcedOrientationGroupState(isAutoRotateEnabled: Boolean) {
         binding.forcedOrientationGroup.children.forEach { view ->
             view.isEnabled = !isAutoRotateEnabled
         }
     }
-
     private fun hasPermissions(): Boolean {
         return permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
     }
-
     private fun isBatteryOptimizationIgnored(): Boolean {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         return powerManager.isIgnoringBatteryOptimizations(packageName)
     }
-
     private fun requestIgnoreBatteryOptimizations() {
         if (!isBatteryOptimizationIgnored()) {
             startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -302,7 +335,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "电池优化已禁用", Toast.LENGTH_SHORT).show()
         }
     }
-
     private fun toggleService() {
         if (!isBatteryOptimizationIgnored()) {
             Toast.makeText(this, "请先禁用电池优化", Toast.LENGTH_LONG).show()
@@ -329,7 +361,6 @@ class MainActivity : AppCompatActivity() {
         }
         binding.root.postDelayed({ updateUI() }, 200)
     }
-
     private fun viewPhotos() {
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         if (isPublic) {

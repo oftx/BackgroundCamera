@@ -1,24 +1,30 @@
 package github.oftx.backgroundcamera
 
-import android.content.Intent
+import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.google.gson.Gson
 import github.oftx.backgroundcamera.databinding.ActivityLoginBinding
 import github.oftx.backgroundcamera.network.ApiService
 import github.oftx.backgroundcamera.network.RetrofitClient
 import github.oftx.backgroundcamera.network.dto.AuthRequest
+import github.oftx.backgroundcamera.network.dto.ErrorResponseDto
 import github.oftx.backgroundcamera.network.dto.RegisterRequest
+import github.oftx.backgroundcamera.util.LogManager
 import github.oftx.backgroundcamera.util.SessionManager
 import kotlinx.coroutines.launch
+import retrofit2.Response
 
 class LoginActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityLoginBinding
     private lateinit var sessionManager: SessionManager
     private val apiService: ApiService by lazy { RetrofitClient.apiService }
+    private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,13 +32,7 @@ class LoginActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         sessionManager = SessionManager(this)
-
-        // If already logged in, go to MainActivity
-        if (sessionManager.isLoggedIn()) {
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
-            return
-        }
+        LogManager.addLog("[UI] LoginActivity created.")
 
         binding.loginButton.setOnClickListener {
             performLogin()
@@ -40,6 +40,13 @@ class LoginActivity : AppCompatActivity() {
         binding.registerButton.setOnClickListener {
             performRegister()
         }
+    }
+
+    private fun handleSuccessfulAuth(token: String, username: String) {
+        sessionManager.saveUserSession(token, username)
+        // FIX: Set a successful result and finish the activity
+        setResult(Activity.RESULT_OK)
+        finish()
     }
 
     private fun performLogin() {
@@ -54,16 +61,19 @@ class LoginActivity : AppCompatActivity() {
             try {
                 val response = apiService.login(AuthRequest(username, password))
                 if (response.isSuccessful && response.body() != null) {
-                    val token = response.body()!!.token
-                    sessionManager.saveUserSession(token, username)
+                    LogManager.addLog("[Auth] Login successful for user: $username")
                     Toast.makeText(this@LoginActivity, "Login Successful", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                    finish()
+                    handleSuccessfulAuth(response.body()!!.token, username)
                 } else {
-                    Toast.makeText(this@LoginActivity, "Login failed: \${response.message()}", Toast.LENGTH_LONG).show()
+                    val errorMsg = parseError(response)
+                    LogManager.addLog("[Auth] Login failed: $errorMsg")
+                    Toast.makeText(this@LoginActivity, "Login failed: $errorMsg", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(this@LoginActivity, "An error occurred: \${e.message}", Toast.LENGTH_LONG).show()
+                Log.e("LoginActivity", "Login exception", e)
+                val errorMsg = "Network error: ${e.localizedMessage}"
+                LogManager.addLog("[Auth] Login failed: $errorMsg")
+                Toast.makeText(this@LoginActivity, "An error occurred: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             } finally {
                 setLoading(false)
             }
@@ -83,16 +93,19 @@ class LoginActivity : AppCompatActivity() {
             try {
                 val response = apiService.register(RegisterRequest(username, password))
                 if (response.isSuccessful && response.body() != null) {
-                    val token = response.body()!!.token
-                    sessionManager.saveUserSession(token, username)
+                    LogManager.addLog("[Auth] Registration successful for user: $username")
                     Toast.makeText(this@LoginActivity, "Registration Successful", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                    finish()
+                    handleSuccessfulAuth(response.body()!!.token, username)
                 } else {
-                    Toast.makeText(this@LoginActivity, "Registration failed: \${response.message()}", Toast.LENGTH_LONG).show()
+                    val errorMsg = parseError(response)
+                    LogManager.addLog("[Auth] Registration failed: $errorMsg")
+                    Toast.makeText(this@LoginActivity, "Registration failed: $errorMsg", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(this@LoginActivity, "An error occurred: \${e.message}", Toast.LENGTH_LONG).show()
+                Log.e("LoginActivity", "Registration exception", e)
+                val errorMsg = "Network error: ${e.localizedMessage}"
+                LogManager.addLog("[Auth] Registration failed: $errorMsg")
+                Toast.makeText(this@LoginActivity, "An error occurred: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             } finally {
                 setLoading(false)
             }
@@ -103,5 +116,15 @@ class LoginActivity : AppCompatActivity() {
         binding.progressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
         binding.loginButton.isEnabled = !isLoading
         binding.registerButton.isEnabled = !isLoading
+    }
+
+    private fun parseError(response: Response<*>): String {
+        return try {
+            val errorBody = response.errorBody()?.string()
+            val errorResponse = gson.fromJson(errorBody, ErrorResponseDto::class.java)
+            errorResponse.message ?: "An unknown error occurred."
+        } catch (e: Exception) {
+            "${response.code()} - ${response.message()}"
+        }
     }
 }

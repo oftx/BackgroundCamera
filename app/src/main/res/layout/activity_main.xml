@@ -7,8 +7,8 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
         android:gravity="center_horizontal"
+        android:orientation="vertical"
         android:padding="24dp"
         tools:context=".MainActivity">
 
@@ -16,9 +16,9 @@
             android:id="@+id/status_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
             android:text="服务已停止"
-            android:textSize="18sp"
-            android:layout_marginBottom="20dp"/>
+            android:textSize="18sp" />
 
         <Button
             android:id="@+id/toggle_service_button"
@@ -40,69 +40,81 @@
             android:layout_marginTop="16dp"
             android:text="查看照片" />
 
+        <Button
+            android:id="@+id/view_logs_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_marginTop="8dp"
+            android:text="View App Logs" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="?android:attr/listDivider"
             android:layout_marginTop="24dp"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginBottom="16dp"
+            android:background="?android:attr/listDivider" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
             android:text="设备同步"
-            android:textSize="18sp"
-            android:layout_marginBottom="8dp"/>
+            android:textSize="18sp" />
 
         <TextView
             android:id="@+id/binding_status_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="设备未绑定"
             android:layout_gravity="center_horizontal"
-            android:layout_marginBottom="8dp"/>
+            android:layout_marginBottom="8dp"
+            android:text="登录以同步和远程控制" />
 
+        <!-- FIX: This button now handles multiple actions -->
         <Button
-            android:id="@+id/bind_device_button"
+            android:id="@+id/account_action_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:text="绑定到账户" />
+            android:text="登录 / 注册" />
 
         <Button
             android:id="@+id/logout_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            style="?attr/materialButtonOutlinedStyle"
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="8dp"
-            android:text="退出登录" />
+            style="?attr/materialButtonOutlinedStyle"
+            android:text="退出登录"
+            android:visibility="gone"
+            tools:visibility="visible"/>
 
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="?android:attr/listDivider"
             android:layout_marginTop="32dp"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginBottom="16dp"
+            android:background="?android:attr/listDivider" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
             android:text="设置"
-            android:textSize="18sp"
-            android:layout_marginBottom="16dp"/>
+            android:textSize="18sp" />
 
+        <!-- Rest of the settings UI remains the same... -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginBottom="16dp"
             android:gravity="center_vertical"
-            android:layout_marginBottom="16dp">
+            android:orientation="horizontal">
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="选择相机:"
-                android:layout_marginEnd="8dp"/>
+                android:layout_marginEnd="8dp"
+                android:text="选择相机:" />
             <Spinner
                 android:id="@+id/camera_spinner"
                 android:layout_width="0dp"
@@ -113,19 +125,19 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
             <TextView
                 android:layout_width="0dp"
-                android:layout_weight="1"
                 android:layout_height="wrap_content"
-                android:text="拍摄间隔 (秒):"/>
+                android:layout_weight="1"
+                android:text="拍摄间隔 (秒):" />
             <EditText
                 android:id="@+id/interval_edit_text"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
-                android:inputType="number"
-                android:gravity="center"/>
+                android:gravity="center"
+                android:inputType="number" />
         </LinearLayout>
 
         <com.google.android.material.switchmaterial.SwitchMaterial
@@ -134,7 +146,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="拍摄时显示提示 (Toast)"
-            android:textSize="16sp"/>
+            android:textSize="16sp" />
 
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/auto_rotate_switch"
@@ -142,22 +154,21 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="自动校正照片方向"
-            android:textSize="16sp"/>
+            android:textSize="16sp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="根据拍摄时手机的姿态自动摆正照片。"
-            android:textSize="12sp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
-            />
+            android:text="根据拍摄时手机的姿态自动摆正照片。"
+            android:textSize="12sp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="固定照片方向 (当自动校正关闭时):"
-            android:layout_marginTop="8dp"/>
+            android:layout_marginTop="8dp"
+            android:text="固定照片方向 (当自动校正关闭时):" />
 
         <RadioGroup
             android:id="@+id/forced_orientation_group"
@@ -172,8 +183,8 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="存储位置:"
-            android:layout_marginTop="24dp"/>
+            android:layout_marginTop="24dp"
+            android:text="存储位置:" />
 
         <RadioGroup
             android:id="@+id/storage_location_group"
@@ -182,6 +193,5 @@
             <RadioButton android:id="@+id/radio_private_storage" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="应用专属目录 (卸载后删除)" />
             <RadioButton android:id="@+id/radio_public_storage" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="公共图库目录 (卸载后保留)" />
         </RadioGroup>
-
     </LinearLayout>
 </ScrollView>

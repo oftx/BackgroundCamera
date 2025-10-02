@@ -1,11 +1,9 @@
 package github.oftx.backgroundcamera
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
 import android.widget.Toast
 import github.oftx.backgroundcamera.network.RetrofitClient
+import github.oftx.backgroundcamera.util.LogManager // <-- Import LogManager
 import github.oftx.backgroundcamera.util.SessionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -20,9 +18,10 @@ import kotlin.coroutines.resume
 object CaptureManager {
 
     suspend fun performCapture(context: Context) {
+        LogManager.addLog("[Capture] Starting capture process...")
         val (success, bytes) = takePictureAsync(context)
 
-        Log.d("CaptureManager", "Capture finished. Success: $success")
+        LogManager.addLog("[Capture] Camera capture finished. Success: $success")
 
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val showToast = prefs.getBoolean(MainActivity.KEY_SHOW_TOAST, false)
@@ -50,15 +49,16 @@ object CaptureManager {
     private suspend fun uploadPhoto(context: Context, bytes: ByteArray) {
         val sessionManager = SessionManager(context)
         if (!sessionManager.isDeviceBound()) {
-            Log.w("CaptureManager", "Device not bound. Skipping upload.")
+            LogManager.addLog("[Upload] Skipped: Device not bound.")
             return
         }
         val deviceId = sessionManager.getDeviceId()
         val deviceToken = sessionManager.getDeviceAuthToken() ?: run {
-            Log.e("CaptureManager", "Device token is null. Cannot upload.")
+            LogManager.addLog("[Upload] ERROR: Device token is null.")
             return
         }
 
+        LogManager.addLog("[Upload] Starting photo upload...")
         withContext(Dispatchers.IO) {
             try {
                 val requestFile = bytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
@@ -67,12 +67,12 @@ object CaptureManager {
 
                 val response = RetrofitClient.apiService.uploadPhoto(deviceToken, body, deviceId, timestamp)
                 if (response.isSuccessful) {
-                    Log.i("CaptureManager", "Photo uploaded successfully: ${response.body()?.url}")
+                    LogManager.addLog("[Upload] Success! URL: ${response.body()?.url}")
                 } else {
-                    Log.e("CaptureManager", "Photo upload failed: ${response.code()} - ${response.message()}")
+                    LogManager.addLog("[Upload] FAILED: ${response.code()} - ${response.message()}")
                 }
             } catch (e: Exception) {
-                Log.e("CaptureManager", "Exception during photo upload", e)
+                LogManager.addLog("[Upload] FAILED with exception: ${e.message}")
             }
         }
     }
