@@ -70,7 +70,27 @@
             android:layout_marginBottom="8dp"
             android:text="登录以同步和远程控制" />
 
-        <!-- FIX: This button now handles multiple actions -->
+        <!-- 【新增】设备名称输入框 -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/device_name_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="32dp"
+            android:layout_marginEnd="32dp"
+            android:layout_marginBottom="8dp"
+            android:hint="设备名称"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/device_name_edit_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- This button now handles multiple actions -->
         <Button
             android:id="@+id/account_action_button"
             android:layout_width="wrap_content"
@@ -78,16 +98,33 @@
             android:layout_gravity="center_horizontal"
             android:text="登录 / 注册" />
 
-        <Button
-            android:id="@+id/logout_button"
+        <!-- 【新增】当设备绑定后显示的操作按钮 -->
+        <LinearLayout
+            android:id="@+id/bound_actions_layout"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="8dp"
-            style="?attr/materialButtonOutlinedStyle"
-            android:text="退出登录"
+            android:orientation="horizontal"
             android:visibility="gone"
-            tools:visibility="visible"/>
+            tools:visibility="visible">
+
+            <Button
+                android:id="@+id/logout_button"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:text="退出登录" />
+
+            <Button
+                android:id="@+id/unbind_button"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="解绑设备"
+                android:textColor="?attr/colorError" />
+        </LinearLayout>
 
         <View
             android:layout_width="match_parent"

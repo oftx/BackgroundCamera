@@ -9,6 +9,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
@@ -18,6 +20,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.children
@@ -28,6 +31,7 @@ import github.oftx.backgroundcamera.databinding.ActivityMainBinding
 import github.oftx.backgroundcamera.network.ApiService
 import github.oftx.backgroundcamera.network.RetrofitClient
 import github.oftx.backgroundcamera.network.dto.ErrorResponseDto
+import github.oftx.backgroundcamera.network.dto.UpdateDeviceNameRequestDto
 import github.oftx.backgroundcamera.util.LogManager
 import github.oftx.backgroundcamera.util.SessionManager
 import kotlinx.coroutines.launch
@@ -43,11 +47,13 @@ class MainActivity : AppCompatActivity() {
 
     private var cameraList: List<CameraHandler.CameraInfo> = emptyList()
 
-    // FIX: Launcher to get result from LoginActivity
+    // 用于设备名称更新的防抖 Handler
+    private val nameUpdateHandler = Handler(Looper.getMainLooper())
+    private var nameUpdateRunnable: Runnable? = null
+
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             LogManager.addLog("[UI] Returned from successful login. Refreshing UI.")
-            // Login was successful, refresh the UI to show logged-in state
             updateUI()
         }
     }
@@ -72,16 +78,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // FIX: No longer redirects. Initialize session manager and UI.
         sessionManager = SessionManager(this)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
         LogManager.addLog("[UI] MainActivity created.")
-
         setupListeners()
         setupCameraSpinner()
         loadPreferences()
@@ -100,44 +101,46 @@ class MainActivity : AppCompatActivity() {
                 requestPermissionsLauncher.launch(permissions.toTypedArray())
             }
         }
+        binding.checkBatteryButton.setOnClickListener { requestIgnoreBatteryOptimizations() }
+        binding.viewPhotosButton.setOnClickListener { viewPhotos() }
+        binding.viewLogsButton.setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
 
-        binding.checkBatteryButton.setOnClickListener {
-            requestIgnoreBatteryOptimizations()
-        }
-
-        binding.viewPhotosButton.setOnClickListener {
-            viewPhotos()
-        }
-
-        binding.viewLogsButton.setOnClickListener {
-            startActivity(Intent(this, LogActivity::class.java))
-        }
-
-        // FIX: New logic for the account action button
         binding.accountActionButton.setOnClickListener {
             if (sessionManager.isLoggedIn()) {
                 if (!sessionManager.isDeviceBound()) {
-                    // Logged in but not bound -> perform bind
                     bindDevice()
                 }
-                // If already bound, the button is disabled, so no action
             } else {
-                // Not logged in -> launch login activity
                 loginLauncher.launch(Intent(this, LoginActivity::class.java))
             }
         }
 
+        // 为新的“登出”和“解绑”按钮设置监听器
         binding.logoutButton.setOnClickListener {
             LogManager.addLog("[Auth] User logged out.")
             sessionManager.logout()
             if (CameraService.isRunning) {
-                // Restart service to disconnect WebSocket
                 restartService()
             }
             updateUI()
         }
 
-        // ... other listeners remain the same
+        binding.unbindButton.setOnClickListener {
+            showUnbindConfirmationDialog()
+        }
+
+        // 设备名称输入框的监听器，实现输入后自动保存
+        binding.deviceNameEditText.doOnTextChanged { text, _, _, _ ->
+            nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
+            nameUpdateRunnable = Runnable {
+                val newName = text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    updateDeviceName(newName)
+                }
+            }
+            nameUpdateHandler.postDelayed(nameUpdateRunnable!!, 1000) // 1秒防抖
+        }
+
         binding.storageLocationGroup.setOnCheckedChangeListener { _, checkedId ->
             val isPublic = checkedId == R.id.radio_public_storage
             prefs.edit().putBoolean(KEY_STORAGE_IS_PUBLIC, isPublic).apply()
@@ -184,6 +187,98 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 显示解绑确认对话框
+    private fun showUnbindConfirmationDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("解绑设备")
+            .setMessage("您确定要将此设备从您的账户中移除吗？解绑后，您需要重新登录并绑定才能再次使用。")
+            .setPositiveButton("确认解绑") { _, _ ->
+                performUnbind()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // 执行解绑操作
+    private fun performUnbind() {
+        if (!sessionManager.isLoggedIn()) return
+        val deviceId = sessionManager.getDeviceId()
+        val jwt = sessionManager.getUserJwt()!!
+
+        lifecycleScope.launch {
+            try {
+                val response = apiService.unbindDevice("Bearer $jwt", deviceId)
+                if (response.isSuccessful) {
+                    LogManager.addLog("[Binding] Device unbind successful.")
+                    Toast.makeText(this@MainActivity, "设备已解绑", Toast.LENGTH_SHORT).show()
+                    sessionManager.logout()
+                    if (CameraService.isRunning) {
+                        restartService()
+                    }
+                    updateUI()
+                } else {
+                    val errorMsg = parseError(response)
+                    LogManager.addLog("[Binding] Unbind failed: $errorMsg")
+                    Toast.makeText(this@MainActivity, "解绑失败: $errorMsg", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Unbind exception", e)
+                val errorMsg = "网络错误: ${e.localizedMessage}"
+                LogManager.addLog("[Binding] Unbind failed: $errorMsg")
+                Toast.makeText(this@MainActivity, "发生错误: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // 获取并显示设备名称
+    private fun fetchAndDisplayDeviceName() {
+        if (!sessionManager.isDeviceBound()) return
+        val deviceId = sessionManager.getDeviceId()
+        val jwt = sessionManager.getUserJwt()!!
+
+        lifecycleScope.launch {
+            try {
+                val response = apiService.getDeviceDetails("Bearer $jwt", deviceId)
+                if (response.isSuccessful && response.body() != null) {
+                    val deviceName = response.body()!!.name
+                    // 移除回调，防止setText触发文本变化监听器
+                    nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
+                    binding.deviceNameEditText.setText(deviceName)
+                } else {
+                    LogManager.addLog("[Device] Failed to fetch device name: ${parseError(response)}")
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Fetch device name exception", e)
+                LogManager.addLog("[Device] Failed to fetch device name: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    // 更新设备名称
+    private fun updateDeviceName(newName: String) {
+        if (!sessionManager.isDeviceBound()) return
+        val deviceId = sessionManager.getDeviceId()
+        val jwt = sessionManager.getUserJwt()!!
+
+        lifecycleScope.launch {
+            try {
+                // 【修改】使用新的DTO类
+                val request = UpdateDeviceNameRequestDto(newName)
+                val response = apiService.updateDeviceName("Bearer $jwt", deviceId, request)
+                if (response.isSuccessful) {
+                    LogManager.addLog("[Device] Device name updated to '$newName'")
+                    Toast.makeText(this@MainActivity, "名称已更新", Toast.LENGTH_SHORT).show()
+                } else {
+                    LogManager.addLog("[Device] Failed to update device name: ${parseError(response)}")
+                    Toast.makeText(this@MainActivity, "名称更新失败", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Update device name exception", e)
+                LogManager.addLog("[Device] Failed to update device name: ${e.localizedMessage}")
+            }
+        }
+    }
+
     private fun bindDevice() {
         val deviceId = sessionManager.getDeviceId()
         val jwt = sessionManager.getUserJwt()!! // We know user is logged in if this is called
@@ -195,7 +290,7 @@ class MainActivity : AppCompatActivity() {
                     val authToken = response.body()!!.authToken
                     sessionManager.saveDeviceBinding(authToken)
                     LogManager.addLog("[Binding] Device bound successfully!")
-                    Toast.makeText(this@MainActivity, "Device bound successfully!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "设备绑定成功!", Toast.LENGTH_SHORT).show()
                     updateUI()
                     if (CameraService.isRunning) {
                         restartService()
@@ -203,13 +298,13 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     val errorMsg = parseError(response)
                     LogManager.addLog("[Binding] Binding failed: $errorMsg")
-                    Toast.makeText(this@MainActivity, "Binding failed: $errorMsg", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "绑定失败: $errorMsg", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Binding exception", e)
-                val errorMsg = "Network error: ${e.localizedMessage}"
+                val errorMsg = "网络错误: ${e.localizedMessage}"
                 LogManager.addLog("[Binding] Binding failed: $errorMsg")
-                Toast.makeText(this@MainActivity, "An error occurred: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "发生错误: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -237,7 +332,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // FIX: This function now handles all 3 states
+    // 重构UI更新逻辑以处理所有状态
     private fun updateUI() {
         // Service status
         val isServiceRunning = CameraService.isRunning
@@ -246,21 +341,30 @@ class MainActivity : AppCompatActivity() {
 
         // Account & Binding Status
         if (sessionManager.isLoggedIn()) {
-            binding.logoutButton.visibility = View.VISIBLE
             if (sessionManager.isDeviceBound()) {
+                // State: Logged In & Bound
                 binding.bindingStatusText.text = "已同步到: ${sessionManager.getUsername()}"
-                binding.accountActionButton.text = "已绑定"
-                binding.accountActionButton.isEnabled = false
+                binding.accountActionButton.visibility = View.GONE // Hide Login/Bind button
+                binding.boundActionsLayout.visibility = View.VISIBLE // Show Logout/Unbind buttons
+                binding.deviceNameLayout.visibility = View.VISIBLE // Show name editor
+                fetchAndDisplayDeviceName()
             } else {
+                // State: Logged In, Not Bound
                 binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
                 binding.accountActionButton.text = "绑定此设备"
                 binding.accountActionButton.isEnabled = true
+                binding.accountActionButton.visibility = View.VISIBLE
+                binding.boundActionsLayout.visibility = View.GONE
+                binding.deviceNameLayout.visibility = View.GONE
             }
         } else {
-            binding.logoutButton.visibility = View.GONE
+            // State: Not Logged In
             binding.bindingStatusText.text = "登录以同步和远程控制"
             binding.accountActionButton.text = "登录 / 注册"
             binding.accountActionButton.isEnabled = true
+            binding.accountActionButton.visibility = View.VISIBLE
+            binding.boundActionsLayout.visibility = View.GONE
+            binding.deviceNameLayout.visibility = View.GONE
         }
     }
 
@@ -276,7 +380,6 @@ class MainActivity : AppCompatActivity() {
         }, 500)
     }
 
-    // ... Other helper methods (setupCameraSpinner, loadPreferences, etc.) remain unchanged
     private fun setupCameraSpinner() {
         cameraList = CameraHandler.getAvailableCameras(this)
         val cameraNames = cameraList.map { it.name }
@@ -292,6 +395,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun loadPreferences() {
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         binding.storageLocationGroup.check(if (isPublic) R.id.radio_public_storage else R.id.radio_private_storage)
@@ -314,18 +418,22 @@ class MainActivity : AppCompatActivity() {
             else -> R.id.radio_force_portrait
         })
     }
+
     private fun updateForcedOrientationGroupState(isAutoRotateEnabled: Boolean) {
         binding.forcedOrientationGroup.children.forEach { view ->
             view.isEnabled = !isAutoRotateEnabled
         }
     }
+
     private fun hasPermissions(): Boolean {
         return permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
     }
+
     private fun isBatteryOptimizationIgnored(): Boolean {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         return powerManager.isIgnoringBatteryOptimizations(packageName)
     }
+
     private fun requestIgnoreBatteryOptimizations() {
         if (!isBatteryOptimizationIgnored()) {
             startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -335,6 +443,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "电池优化已禁用", Toast.LENGTH_SHORT).show()
         }
     }
+
     private fun toggleService() {
         if (!isBatteryOptimizationIgnored()) {
             Toast.makeText(this, "请先禁用电池优化", Toast.LENGTH_LONG).show()
@@ -361,6 +470,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.root.postDelayed({ updateUI() }, 200)
     }
+
     private fun viewPhotos() {
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         if (isPublic) {

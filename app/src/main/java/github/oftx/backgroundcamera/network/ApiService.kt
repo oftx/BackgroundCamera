@@ -26,4 +26,24 @@ interface ApiService {
         @Query("deviceId") deviceId: String,
         @Query("timestamp") timestamp: String // ISO 8601 format (e.g., 2025-10-02T10:30:00Z)
     ): Response<PhotoDto>
+
+    @POST("/api/v1/devices/{deviceId}/unbind")
+    suspend fun unbindDevice(
+        @Header("Authorization") jwt: String,
+        @Path("deviceId") deviceId: String
+    ): Response<Void>
+
+    @GET("/api/v1/devices/{deviceId}")
+    suspend fun getDeviceDetails(
+        @Header("Authorization") jwt: String,
+        @Path("deviceId") deviceId: String
+    ): Response<DeviceDetailsDto>
+
+    // 【修改】更新设备名称接口以匹配新的后端API
+    @PATCH("/api/v1/devices/{deviceId}")
+    suspend fun updateDeviceName(
+        @Header("Authorization") jwt: String,
+        @Path("deviceId") deviceId: String,
+        @Body request: UpdateDeviceNameRequestDto
+    ): Response<DeviceDetailsDto>
 }
