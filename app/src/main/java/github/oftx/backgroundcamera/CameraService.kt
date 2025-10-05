@@ -3,6 +3,7 @@ package github.oftx.backgroundcamera
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.*
 import android.util.Log
 import android.view.OrientationEventListener
@@ -31,11 +32,12 @@ class CameraService : Service() {
         const val CHANNEL_ID = "CameraServiceChannel"
         const val ALARM_REQUEST_CODE = 102
 
-        // --- Action Constants ---
         const val ACTION_INITIALIZE = "github.oftx.backgroundcamera.ACTION_INITIALIZE"
         const val ACTION_SHUTDOWN = "github.oftx.backgroundcamera.ACTION_SHUTDOWN"
         const val ACTION_START_MONITORING = "github.oftx.backgroundcamera.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "github.oftx.backgroundcamera.ACTION_STOP_MONITORING"
+        // 【新增】为重新调度拍照任务定义一个新的Action
+        const val ACTION_SCHEDULE_NEXT_CAPTURE = "github.oftx.backgroundcamera.ACTION_SCHEDULE_NEXT_CAPTURE"
         const val ACTION_SETTINGS_UPDATED = "github.oftx.backgroundcamera.ACTION_SETTINGS_UPDATED"
         const val ACTION_WS_STATUS_UPDATE = "github.oftx.backgroundcamera.WS_STATUS_UPDATE"
         const val EXTRA_WS_STATUS = "EXTRA_WS_STATUS"
@@ -43,12 +45,10 @@ class CameraService : Service() {
         const val ACTION_RECONNECT_WS = "github.oftx.backgroundcamera.ACTION_RECONNECT_WS"
         const val ACTION_DISCONNECT_WS = "github.oftx.backgroundcamera.ACTION_DISCONNECT_WS"
 
-
-        // --- State Variables ---
         @Volatile
-        var isRunning = false // Indicates if the service object exists
+        var isRunning = false
         @Volatile
-        var isMonitoringActive = false // Indicates if the capture alarm is scheduled
+        var isMonitoringActive = false
 
         @Volatile
         var currentDeviceRotation: Int = 0
@@ -59,7 +59,6 @@ class CameraService : Service() {
         isRunning = true
         sessionManager = SessionManager(this)
         Log.d("CameraService", "Service Created")
-        // WebSocket is initialized on demand via INITIALIZE action or settings update
         orientationEventListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(orientation: Int) {
                 if (orientation == ORIENTATION_UNKNOWN) return
@@ -136,14 +135,32 @@ class CameraService : Service() {
         when (intent?.action) {
             ACTION_INITIALIZE -> {
                 createNotificationChannel()
-                startForeground(NOTIFICATION_ID, createNotification("设备已连接，等待指令"))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        createNotification("设备已连接，等待指令"),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, createNotification("设备已连接，等待指令"))
+                }
                 setupWebSocket()
             }
             ACTION_START_MONITORING -> {
                 if (!isMonitoringActive) {
                     isMonitoringActive = true
                     Log.i("CameraService", "Monitoring started.")
-                    updateNotificationText("正在后台定时拍照")
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            createNotification("正在后台定时拍照"),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        )
+                    } else {
+                        updateNotificationText("正在后台定时拍照")
+                    }
+
                     scheduleNextCapture()
                     sendStatusUpdate()
                 }
@@ -155,6 +172,14 @@ class CameraService : Service() {
                     cancelAlarm()
                     updateNotificationText("设备已连接，等待指令")
                     sendStatusUpdate()
+                }
+            }
+            // 【新增】处理来自广播接收器的重新调度请求
+            ACTION_SCHEDULE_NEXT_CAPTURE -> {
+                if (isMonitoringActive) {
+                    scheduleNextCapture()
+                } else {
+                    Log.w("CameraService", "Received schedule request but monitoring is not active. Ignoring.")
                 }
             }
             ACTION_SHUTDOWN -> {
@@ -183,7 +208,6 @@ class CameraService : Service() {
             }
             else -> {
                 Log.w("CameraService", "Service started with null or unknown intent action. No action taken.")
-                // To prevent crashes on older Androids if system restarts service, we stop it.
                 if (intent == null) stopSelf()
             }
         }

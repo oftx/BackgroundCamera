@@ -2,12 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permissions remain the same -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -26,7 +27,6 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
-        <!-- FIX: MainActivity is now the LAUNCHER activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -37,7 +37,6 @@
             </intent-filter>
         </activity>
 
-        <!-- FIX: LoginActivity is now a standard activity -->
         <activity
             android:name=".LoginActivity"
             android:exported="false"
@@ -51,7 +50,7 @@
             android:name=".CameraService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="camera" />
+            android:foregroundServiceType="dataSync|camera" />
 
         <receiver
             android:name=".CameraBroadcastReceiver"

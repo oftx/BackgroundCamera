@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 object CameraHandler {
 
@@ -22,6 +24,9 @@ object CameraHandler {
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+
+    // 【新增】使用Semaphore来确保同一时间只有一个拍照任务在执行
+    private val cameraSemaphore = Semaphore(1)
 
     private var onCaptureComplete: ((Boolean, ByteArray?) -> Unit)? = null
     private lateinit var appContext: Context
@@ -64,11 +69,19 @@ object CameraHandler {
 
     @SuppressLint("MissingPermission")
     fun takePicture(context: Context, onComplete: (Boolean, ByteArray?) -> Unit) {
-        if (this.onCaptureComplete != null) {
-            Log.w(TAG, "Capture already in progress. Ignoring new request.")
+        // 【修改】尝试获取信号量锁，如果失败则直接返回
+        try {
+            if (!cameraSemaphore.tryAcquire(3, TimeUnit.SECONDS)) {
+                Log.w(TAG, "Capture in progress. Ignoring new request.")
+                onComplete(false, null)
+                return
+            }
+        } catch (e: InterruptedException) {
+            Log.e(TAG, "Semaphore acquire interrupted", e)
             onComplete(false, null)
             return
         }
+
 
         this.onCaptureComplete = onComplete
         this.appContext = context.applicationContext
@@ -138,7 +151,7 @@ object CameraHandler {
         override fun onError(camera: CameraDevice, error: Int) {
             Log.e(TAG, "Camera error callback. Error code: $error")
             closeCameraResources()
-            handleResult(false, null)
+            // Don't call handleResult here, closeCameraResources will handle it
         }
         override fun onClosed(camera: CameraDevice) {
             Log.d(TAG, "Camera device closed, stopping background thread.")
@@ -267,10 +280,10 @@ object CameraHandler {
     }
 
     private fun handleResult(success: Boolean, bytes: ByteArray?) {
-        onCaptureComplete?.let {
-            it(success, bytes)
-            onCaptureComplete = null
-        }
+        // Use a local variable to avoid race conditions with onCaptureComplete being nulled
+        val callback = onCaptureComplete
+        onCaptureComplete = null
+        callback?.invoke(success, bytes)
         closeCameraResources()
     }
 
@@ -279,15 +292,23 @@ object CameraHandler {
             captureSession?.close()
             captureSession = null
             cameraDevice?.close()
+            // If cameraDevice is already null (e.g., open failed), we need to manually stop the thread
+            if (cameraDevice == null) {
+                stopBackgroundThread()
+            }
             cameraDevice = null
             imageReader?.close()
             imageReader = null
         } catch (e: Exception) {
             Log.e(TAG, "Error closing camera resources", e)
-        } finally {
+            // Even if closing fails, ensure thread is stopped and semaphore is released
             if (cameraDevice == null) {
                 stopBackgroundThread()
             }
+        } finally {
+            // 【修改】确保在任何情况下都释放信号量
+            Log.d(TAG, "Releasing camera semaphore.")
+            cameraSemaphore.release()
         }
     }
 
@@ -301,9 +322,10 @@ object CameraHandler {
     private fun stopBackgroundThread() {
         backgroundThread?.quitSafely()
         try {
-            backgroundThread?.join(500)
+            backgroundThread?.join(500) // Wait for thread to die
             backgroundThread = null
             backgroundHandler = null
+            Log.d(TAG, "Background thread stopped.")
         } catch (e: InterruptedException) {
             Log.e(TAG, "Error stopping background thread", e)
         }
