@@ -4,3 +4,7 @@
 /captures
 .DS_Store
 local.properties
+*.apk
+*.dm
+app/debug/output-metadata.json
+app/release/output-metadata.json
