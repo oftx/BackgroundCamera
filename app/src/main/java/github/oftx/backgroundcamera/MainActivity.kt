@@ -45,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sessionManager: SessionManager
     private val gson = Gson()
 
-    // apiService不再是lazy属性，而是动态获取
     private val apiService: ApiService
         get() = RetrofitClient.getApiService(this)
 
@@ -53,6 +52,9 @@ class MainActivity : AppCompatActivity() {
 
     private val nameUpdateHandler = Handler(Looper.getMainLooper())
     private var nameUpdateRunnable: Runnable? = null
+
+    // 【新增】用于缓存当前设备名称，以防止不必要的更新
+    private var currentDeviceName: String? = null
 
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -135,18 +137,17 @@ class MainActivity : AppCompatActivity() {
             nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
             nameUpdateRunnable = Runnable {
                 val newName = text.toString().trim()
-                if (newName.isNotEmpty()) {
+                // 【修改】核心修复：仅当名称实际发生改变时才触发更新
+                if (newName.isNotEmpty() && newName != currentDeviceName) {
                     updateDeviceName(newName)
                 }
             }
-            nameUpdateHandler.postDelayed(nameUpdateRunnable!!, 1000) // 1秒防抖
+            nameUpdateHandler.postDelayed(nameUpdateRunnable!!, 1000)
         }
 
-        // 服务器地址输入框的监听器
         binding.serverAddressEditText.doOnTextChanged { text, _, _, _ ->
             val url = text.toString().trim().removeSuffix("/")
             prefs.edit().putString(KEY_SERVER_URL, url).apply()
-            // 通知服务设置已更改，以便它可以更新WebSocket连接
             notifyServiceOfSettingsChange()
         }
 
@@ -247,7 +248,8 @@ class MainActivity : AppCompatActivity() {
                 val response = apiService.getDeviceDetails("Bearer $jwt", deviceId)
                 if (response.isSuccessful && response.body() != null) {
                     val deviceName = response.body()!!.name
-                    nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
+                    // 【修改】更新缓存的名称
+                    this@MainActivity.currentDeviceName = deviceName
                     binding.deviceNameEditText.setText(deviceName)
                 } else {
                     LogManager.addLog("[Device] Failed to fetch device name: ${parseError(response)}")
@@ -269,6 +271,8 @@ class MainActivity : AppCompatActivity() {
                 val request = UpdateDeviceNameRequestDto(newName)
                 val response = apiService.updateDeviceName("Bearer $jwt", deviceId, request)
                 if (response.isSuccessful) {
+                    // 【修改】成功更新后，同步更新缓存的名称
+                    this@MainActivity.currentDeviceName = newName
                     LogManager.addLog("[Device] Device name updated to '$newName'")
                     Toast.makeText(this@MainActivity, "名称已更新", Toast.LENGTH_SHORT).show()
                 } else {
