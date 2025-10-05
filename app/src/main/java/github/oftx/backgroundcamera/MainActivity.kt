@@ -53,12 +53,16 @@ class MainActivity : AppCompatActivity() {
     private var nameUpdateRunnable: Runnable? = null
     private var currentDeviceName: String? = null
 
+    // Cache the last known WS status to help update UI correctly
+    private var lastWsStatus: WsConnectionStatus? = null
+
     private val wsStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == CameraService.ACTION_WS_STATUS_UPDATE) {
                 val statusString = intent.getStringExtra(CameraService.EXTRA_WS_STATUS)
                 val status = WsConnectionStatus.valueOf(statusString ?: WsConnectionStatus.DISCONNECTED.name)
-                updateConnectionStatusUI(status)
+                lastWsStatus = status
+                updateCombinedStatusUI()
             }
         }
     }
@@ -106,10 +110,13 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).registerReceiver(
             wsStatusReceiver, IntentFilter(CameraService.ACTION_WS_STATUS_UPDATE)
         )
-        val requestStatusIntent = Intent(this, CameraService::class.java).apply {
-            action = CameraService.ACTION_REQUEST_WS_STATUS
+        // If service is expected to be running, request its current status
+        if (sessionManager.isDeviceBound()) {
+            val requestStatusIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_REQUEST_WS_STATUS
+            }
+            startService(requestStatusIntent)
         }
-        startService(requestStatusIntent)
     }
 
     override fun onPause() {
@@ -141,14 +148,12 @@ class MainActivity : AppCompatActivity() {
 
         binding.logoutButton.setOnClickListener {
             LogManager.addLog("[Auth] User logged out.")
-            sessionManager.logout()
-            // If monitoring was active, send command to stop it
-            if (CameraService.isMonitoringActive) {
-                val stopIntent = Intent(this, CameraService::class.java).apply {
-                    action = CameraService.ACTION_STOP_MONITORING
-                }
-                startService(stopIntent)
+            // Send shutdown command to the service
+            val shutdownIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_SHUTDOWN
             }
+            startService(shutdownIntent)
+            sessionManager.logout()
             updateUI()
         }
 
@@ -161,8 +166,18 @@ class MainActivity : AppCompatActivity() {
                 action = CameraService.ACTION_RECONNECT_WS
             }
             startService(reconnectIntent)
-            updateConnectionStatusUI(WsConnectionStatus.CONNECTING)
+            lastWsStatus = WsConnectionStatus.CONNECTING
+            updateCombinedStatusUI()
         }
+
+        // Add listener for the new disconnect button
+        binding.disconnectWsButton.setOnClickListener {
+            val disconnectIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_DISCONNECT_WS
+            }
+            startService(disconnectIntent)
+        }
+
 
         binding.deviceNameEditText.doOnTextChanged { text, _, _, _ ->
             nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
@@ -244,13 +259,11 @@ class MainActivity : AppCompatActivity() {
         val jwt = sessionManager.getUserJwt()!!
         lifecycleScope.launch {
             try {
-                // Also stop monitoring if it's active
-                if (CameraService.isMonitoringActive) {
-                    val stopIntent = Intent(this@MainActivity, CameraService::class.java).apply {
-                        action = CameraService.ACTION_STOP_MONITORING
-                    }
-                    startService(stopIntent)
+                // Send shutdown command to the service before unbinding
+                val shutdownIntent = Intent(this@MainActivity, CameraService::class.java).apply {
+                    action = CameraService.ACTION_SHUTDOWN
                 }
+                startService(shutdownIntent)
 
                 val response = apiService.unbindDevice("Bearer $jwt", deviceId)
                 if (response.isSuccessful) {
@@ -327,11 +340,18 @@ class MainActivity : AppCompatActivity() {
                     sessionManager.saveDeviceBinding(authToken)
                     LogManager.addLog("[Binding] Device bound successfully!")
                     Toast.makeText(this@MainActivity, "设备绑定成功!", Toast.LENGTH_SHORT).show()
-                    updateUI()
-                    // Re-check if monitoring was active and restart it
-                    if (CameraService.isMonitoringActive) {
-                        restartService()
+
+                    // Initialize and start the service in foreground after binding
+                    val initIntent = Intent(this@MainActivity, CameraService::class.java).apply {
+                        action = CameraService.ACTION_INITIALIZE
                     }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(initIntent)
+                    } else {
+                        startService(initIntent)
+                    }
+
+                    updateUI()
                 } else {
                     val errorMsg = parseError(response)
                     LogManager.addLog("[Binding] Binding failed: $errorMsg")
@@ -370,7 +390,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateUI() {
-        // 【修改】UI状态现在依赖于 isMonitoringActive
         val isMonitoring = CameraService.isMonitoringActive
         binding.statusText.text = if (isMonitoring) "服务正在运行" else "服务已停止"
         binding.toggleServiceButton.text = if (isMonitoring) "停止监控服务" else "启动监控服务"
@@ -383,6 +402,7 @@ class MainActivity : AppCompatActivity() {
                 binding.deviceNameLayout.visibility = View.VISIBLE
                 binding.connectionStatusLayout.visibility = View.VISIBLE
                 fetchAndDisplayDeviceName()
+                updateCombinedStatusUI() // Update WS buttons based on current state
             } else {
                 binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
                 binding.accountActionButton.text = "绑定此设备"
@@ -403,42 +423,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateConnectionStatusUI(status: WsConnectionStatus) {
+    private fun updateCombinedStatusUI() {
+        val status = lastWsStatus ?: return // If we don't know the status yet, do nothing
+        val isMonitoring = CameraService.isMonitoringActive
+
         when (status) {
             WsConnectionStatus.CONNECTED -> {
-                binding.connectionStatusText.text = "网络状态: 已连接"
+                binding.connectionStatusText.text = "已连接"
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, R.color.green_700))
                 binding.reconnectButton.visibility = View.GONE
+                // Only show disconnect button if monitoring is NOT active
+                binding.disconnectWsButton.visibility = if (!isMonitoring) View.VISIBLE else View.GONE
             }
             WsConnectionStatus.CONNECTING -> {
-                binding.connectionStatusText.text = "网络状态: 连接中..."
+                binding.connectionStatusText.text = "连接中..."
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.darker_gray))
                 binding.reconnectButton.visibility = View.GONE
+                binding.disconnectWsButton.visibility = View.GONE
             }
             WsConnectionStatus.DISCONNECTED -> {
-                binding.connectionStatusText.text = "网络状态: 已断开"
+                binding.connectionStatusText.text = "已断开"
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, com.google.android.material.R.color.design_default_color_error))
-                binding.reconnectButton.visibility = View.VISIBLE
+                // Only show reconnect button if monitoring is NOT active
+                binding.reconnectButton.visibility = if (!isMonitoring) View.VISIBLE else View.GONE
+                binding.disconnectWsButton.visibility = View.GONE
             }
         }
-    }
-
-    private fun restartService() {
-        val stopIntent = Intent(this, CameraService::class.java).apply {
-            action = CameraService.ACTION_STOP_MONITORING
-        }
-        startService(stopIntent)
-
-        binding.root.postDelayed({
-            val startIntent = Intent(this, CameraService::class.java).apply {
-                action = CameraService.ACTION_START_MONITORING
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(startIntent)
-            } else {
-                startService(startIntent)
-            }
-        }, 500)
     }
 
     private fun setupCameraSpinner() {
@@ -502,7 +512,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 【核心修改】现在发送明确的启动/停止Action
     private fun toggleService() {
         if (!isBatteryOptimizationIgnored()) {
             Toast.makeText(this, "请先禁用电池优化", Toast.LENGTH_LONG).show()
@@ -529,7 +538,11 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
         }
-        binding.root.postDelayed({ updateUI() }, 200)
+        // Use a short delay to allow service state to update, then refresh UI
+        binding.root.postDelayed({
+            updateUI()
+            updateCombinedStatusUI()
+        }, 200)
     }
 
     private fun viewPhotos() {

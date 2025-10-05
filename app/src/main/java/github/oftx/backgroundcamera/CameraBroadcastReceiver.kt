@@ -23,9 +23,10 @@ class CameraBroadcastReceiver : BroadcastReceiver() {
             try {
                 CaptureManager.performCapture(context)
             } finally {
-                // 【核心修改】只有当监控任务应该处于活动状态时，才重新调度下一次任务
+                // 只有当监控任务应该处于活动状态时，才重新调度下一次任务
                 if (CameraService.isMonitoringActive) {
                     val serviceIntent = Intent(context, CameraService::class.java).apply {
+                        // 【修改】这里是关键：重新调度的是 START_MONITORING，而不是通用启动
                         action = CameraService.ACTION_START_MONITORING
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

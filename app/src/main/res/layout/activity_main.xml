@@ -71,6 +71,7 @@
             android:layout_marginBottom="8dp"
             android:text="登录以同步和远程控制" />
 
+        <!-- WebSocket连接状态显示 -->
         <LinearLayout
             android:id="@+id/connection_status_layout"
             android:layout_width="wrap_content"
@@ -81,12 +82,29 @@
             android:visibility="gone"
             tools:visibility="visible">
 
+            <!-- 【修改】标签文本固定 -->
+            <TextView
+                android:id="@+id/websocket_status_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="WebSocket状态: " />
+
             <TextView
                 android:id="@+id/connection_status_text"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
-                tools:text="网络状态: 已连接" />
+                tools:text="已连接" />
+
+            <!-- 【新增】断开连接按钮 -->
+            <Button
+                android:id="@+id/disconnect_ws_button"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="断开"
+                android:visibility="gone"
+                tools:visibility="visible"/>
 
             <Button
                 android:id="@+id/reconnect_button"
@@ -98,12 +116,14 @@
                 tools:visibility="visible"/>
         </LinearLayout>
 
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/device_name_layout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="32dp"
             android:layout_marginEnd="32dp"
+            android:layout_marginTop="8dp"
             android:layout_marginBottom="8dp"
             android:hint="设备名称"
             android:visibility="gone"
@@ -165,7 +185,6 @@
             android:text="设置"
             android:textSize="18sp" />
 
-        <!-- 【新增】服务器地址设置 -->
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/server_address_layout"
             android:layout_width="match_parent"
@@ -181,7 +200,6 @@
                 android:inputType="textUri"
                 android:maxLines="1" />
         </com.google.android.material.textfield.TextInputLayout>
-
 
         <LinearLayout
             android:layout_width="match_parent"
