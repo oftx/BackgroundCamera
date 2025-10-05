@@ -1,11 +1,10 @@
 package github.oftx.backgroundcamera
 
-import github.oftx.backgroundcamera.network.AppConfig
+import com.google.gson.Gson
 import github.oftx.backgroundcamera.network.dto.CommandPayload
 import github.oftx.backgroundcamera.network.dto.DeviceRegistration
 import github.oftx.backgroundcamera.network.dto.DeviceStatusUpdate
-import github.oftx.backgroundcamera.util.LogManager // <-- Import LogManager
-import com.google.gson.Gson
+import github.oftx.backgroundcamera.util.LogManager
 import okhttp3.*
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -14,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class WebSocketManager(
     private val deviceId: String,
+    private val webSocketUrl: String, // URL现在是动态传入的
     private val onCommandReceived: (CommandPayload) -> Unit
 ) {
     private val TAG = "WebSocketManager"
@@ -36,8 +36,9 @@ class WebSocketManager(
             LogManager.addLog("[WS] Connect called but already connected or connecting.")
             return
         }
-        val request = Request.Builder().url(AppConfig.WEBSOCKET_URL).build()
-        LogManager.addLog("[WS] Attempting to connect to ${AppConfig.WEBSOCKET_URL}")
+        // 使用动态传入的webSocketUrl
+        val request = Request.Builder().url(webSocketUrl).build()
+        LogManager.addLog("[WS] Attempting to connect to $webSocketUrl")
         webSocket = client.newWebSocket(request, WebSocketListenerImpl())
     }
 

@@ -7,6 +7,7 @@ import android.os.*
 import android.util.Log
 import android.view.OrientationEventListener
 import androidx.core.app.NotificationCompat
+import github.oftx.backgroundcamera.network.AppConfig
 import github.oftx.backgroundcamera.network.dto.CommandPayload
 import github.oftx.backgroundcamera.network.dto.DeviceStatus
 import github.oftx.backgroundcamera.network.dto.DeviceStatusUpdate
@@ -61,16 +62,28 @@ class CameraService : Service() {
         }
     }
 
+    // 现在动态读取URL并创建WebSocketManager
     private fun setupWebSocket() {
         val deviceId = sessionManager.getDeviceId()
         if (sessionManager.isDeviceBound()) {
+            // Disconnect any existing connection
             webSocketManager?.disconnect()
-            webSocketManager = WebSocketManager(deviceId) { command: CommandPayload ->
+
+            // Get URL from preferences
+            val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            val baseUrl = prefs.getString(MainActivity.KEY_SERVER_URL, AppConfig.BASE_URL) ?: AppConfig.BASE_URL
+            val webSocketUrl = baseUrl.replace("http://", "ws://")
+                .replace("https://", "wss://")
+                .removeSuffix("/") + "/ws/websocket"
+
+            webSocketManager = WebSocketManager(deviceId, webSocketUrl) { command: CommandPayload ->
                 handleRemoteCommand(command.command)
             }
             webSocketManager?.connect()
         } else {
             Log.w("CameraService", "Device is not bound, WebSocket will not connect.")
+            webSocketManager?.disconnect()
+            webSocketManager = null
         }
     }
 
@@ -93,7 +106,6 @@ class CameraService : Service() {
                     }
                 }
             }
-
             else -> Log.w("CameraService", "Unknown remote command: $command")
         }
     }
@@ -102,9 +114,8 @@ class CameraService : Service() {
         Log.d("CameraService", "Service Started with action: ${intent?.action}")
 
         if (intent?.action == ACTION_SETTINGS_UPDATED) {
-            if (sessionManager.isDeviceBound() && webSocketManager == null) {
-                setupWebSocket()
-            }
+            // 如果设置更新，重新设置WebSocket（它可能会使用新的URL）
+            setupWebSocket()
             sendStatusUpdate()
             return START_STICKY
         }
@@ -143,7 +154,18 @@ class CameraService : Service() {
         webSocketManager?.disconnect()
         orientationEventListener.disable()
         isRunning = false
-        sendStatusUpdate()
+        // Send a final status update indicating service is stopped
+        val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val status = DeviceStatus(
+            isServiceRunning = false, // Explicitly set to false
+            captureInterval = prefs.getInt(
+                MainActivity.KEY_CAPTURE_INTERVAL,
+                MainActivity.DEFAULT_INTERVAL_SECONDS
+            ),
+            selectedCameraId = prefs.getString(MainActivity.KEY_SELECTED_CAMERA_ID, null)
+        )
+        val statusUpdate = DeviceStatusUpdate(sessionManager.getDeviceId(), status)
+        webSocketManager?.sendStatusUpdate(statusUpdate)
         Log.d("CameraService", "Service Destroyed")
     }
 

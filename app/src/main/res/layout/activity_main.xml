@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -70,7 +71,6 @@
             android:layout_marginBottom="8dp"
             android:text="登录以同步和远程控制" />
 
-        <!-- 【新增】设备名称输入框 -->
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/device_name_layout"
             android:layout_width="match_parent"
@@ -90,7 +90,6 @@
                 android:maxLines="1" />
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- This button now handles multiple actions -->
         <Button
             android:id="@+id/account_action_button"
             android:layout_width="wrap_content"
@@ -98,7 +97,6 @@
             android:layout_gravity="center_horizontal"
             android:text="登录 / 注册" />
 
-        <!-- 【新增】当设备绑定后显示的操作按钮 -->
         <LinearLayout
             android:id="@+id/bound_actions_layout"
             android:layout_width="wrap_content"
@@ -140,7 +138,24 @@
             android:text="设置"
             android:textSize="18sp" />
 
-        <!-- Rest of the settings UI remains the same... -->
+        <!-- 【新增】服务器地址设置 -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/server_address_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:hint="服务器地址"
+            app:helperText="例如: http://192.168.1.100:8081">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/server_address_edit_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

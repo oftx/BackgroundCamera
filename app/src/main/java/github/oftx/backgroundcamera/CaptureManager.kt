@@ -3,7 +3,7 @@ package github.oftx.backgroundcamera
 import android.content.Context
 import android.widget.Toast
 import github.oftx.backgroundcamera.network.RetrofitClient
-import github.oftx.backgroundcamera.util.LogManager // <-- Import LogManager
+import github.oftx.backgroundcamera.util.LogManager
 import github.oftx.backgroundcamera.util.SessionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -65,7 +65,9 @@ object CaptureManager {
                 val body = MultipartBody.Part.createFormData("file", "photo.jpg", requestFile)
                 val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
 
-                val response = RetrofitClient.apiService.uploadPhoto(deviceToken, body, deviceId, timestamp)
+                // 【修正】使用 getApiService(context) 来获取服务实例
+                val response = RetrofitClient.getApiService(context).uploadPhoto(deviceToken, body, deviceId, timestamp)
+
                 if (response.isSuccessful) {
                     LogManager.addLog("[Upload] Success! URL: ${response.body()?.url}")
                 } else {

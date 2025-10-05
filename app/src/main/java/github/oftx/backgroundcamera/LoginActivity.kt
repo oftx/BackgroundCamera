@@ -23,7 +23,8 @@ class LoginActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityLoginBinding
     private lateinit var sessionManager: SessionManager
-    private val apiService: ApiService by lazy { RetrofitClient.apiService }
+    // 【修正】使用新的方式来延迟初始化 apiService
+    private val apiService: ApiService by lazy { RetrofitClient.getApiService(this) }
     private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +45,6 @@ class LoginActivity : AppCompatActivity() {
 
     private fun handleSuccessfulAuth(token: String, username: String) {
         sessionManager.saveUserSession(token, username)
-        // FIX: Set a successful result and finish the activity
         setResult(Activity.RESULT_OK)
         finish()
     }

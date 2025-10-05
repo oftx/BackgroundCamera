@@ -29,6 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.gson.Gson
 import github.oftx.backgroundcamera.databinding.ActivityMainBinding
 import github.oftx.backgroundcamera.network.ApiService
+import github.oftx.backgroundcamera.network.AppConfig
 import github.oftx.backgroundcamera.network.RetrofitClient
 import github.oftx.backgroundcamera.network.dto.ErrorResponseDto
 import github.oftx.backgroundcamera.network.dto.UpdateDeviceNameRequestDto
@@ -42,12 +43,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: SharedPreferences
     private lateinit var sessionManager: SessionManager
-    private val apiService: ApiService by lazy { RetrofitClient.apiService }
     private val gson = Gson()
+
+    // apiService不再是lazy属性，而是动态获取
+    private val apiService: ApiService
+        get() = RetrofitClient.getApiService(this)
 
     private var cameraList: List<CameraHandler.CameraInfo> = emptyList()
 
-    // 用于设备名称更新的防抖 Handler
     private val nameUpdateHandler = Handler(Looper.getMainLooper())
     private var nameUpdateRunnable: Runnable? = null
 
@@ -115,7 +118,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 为新的“登出”和“解绑”按钮设置监听器
         binding.logoutButton.setOnClickListener {
             LogManager.addLog("[Auth] User logged out.")
             sessionManager.logout()
@@ -129,7 +131,6 @@ class MainActivity : AppCompatActivity() {
             showUnbindConfirmationDialog()
         }
 
-        // 设备名称输入框的监听器，实现输入后自动保存
         binding.deviceNameEditText.doOnTextChanged { text, _, _, _ ->
             nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
             nameUpdateRunnable = Runnable {
@@ -139,6 +140,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             nameUpdateHandler.postDelayed(nameUpdateRunnable!!, 1000) // 1秒防抖
+        }
+
+        // 服务器地址输入框的监听器
+        binding.serverAddressEditText.doOnTextChanged { text, _, _, _ ->
+            val url = text.toString().trim().removeSuffix("/")
+            prefs.edit().putString(KEY_SERVER_URL, url).apply()
+            // 通知服务设置已更改，以便它可以更新WebSocket连接
+            notifyServiceOfSettingsChange()
         }
 
         binding.storageLocationGroup.setOnCheckedChangeListener { _, checkedId ->
@@ -187,7 +196,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 显示解绑确认对话框
     private fun showUnbindConfirmationDialog() {
         AlertDialog.Builder(this)
             .setTitle("解绑设备")
@@ -199,7 +207,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // 执行解绑操作
     private fun performUnbind() {
         if (!sessionManager.isLoggedIn()) return
         val deviceId = sessionManager.getDeviceId()
@@ -230,7 +237,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 获取并显示设备名称
     private fun fetchAndDisplayDeviceName() {
         if (!sessionManager.isDeviceBound()) return
         val deviceId = sessionManager.getDeviceId()
@@ -241,7 +247,6 @@ class MainActivity : AppCompatActivity() {
                 val response = apiService.getDeviceDetails("Bearer $jwt", deviceId)
                 if (response.isSuccessful && response.body() != null) {
                     val deviceName = response.body()!!.name
-                    // 移除回调，防止setText触发文本变化监听器
                     nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
                     binding.deviceNameEditText.setText(deviceName)
                 } else {
@@ -254,7 +259,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 更新设备名称
     private fun updateDeviceName(newName: String) {
         if (!sessionManager.isDeviceBound()) return
         val deviceId = sessionManager.getDeviceId()
@@ -262,7 +266,6 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                // 【修改】使用新的DTO类
                 val request = UpdateDeviceNameRequestDto(newName)
                 val response = apiService.updateDeviceName("Bearer $jwt", deviceId, request)
                 if (response.isSuccessful) {
@@ -281,7 +284,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindDevice() {
         val deviceId = sessionManager.getDeviceId()
-        val jwt = sessionManager.getUserJwt()!! // We know user is logged in if this is called
+        val jwt = sessionManager.getUserJwt()!!
 
         lifecycleScope.launch {
             try {
@@ -332,24 +335,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 重构UI更新逻辑以处理所有状态
     private fun updateUI() {
-        // Service status
         val isServiceRunning = CameraService.isRunning
         binding.statusText.text = if (isServiceRunning) "服务正在运行" else "服务已停止"
         binding.toggleServiceButton.text = if (isServiceRunning) "停止监控服务" else "启动监控服务"
 
-        // Account & Binding Status
         if (sessionManager.isLoggedIn()) {
             if (sessionManager.isDeviceBound()) {
-                // State: Logged In & Bound
                 binding.bindingStatusText.text = "已同步到: ${sessionManager.getUsername()}"
-                binding.accountActionButton.visibility = View.GONE // Hide Login/Bind button
-                binding.boundActionsLayout.visibility = View.VISIBLE // Show Logout/Unbind buttons
-                binding.deviceNameLayout.visibility = View.VISIBLE // Show name editor
+                binding.accountActionButton.visibility = View.GONE
+                binding.boundActionsLayout.visibility = View.VISIBLE
+                binding.deviceNameLayout.visibility = View.VISIBLE
                 fetchAndDisplayDeviceName()
             } else {
-                // State: Logged In, Not Bound
                 binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
                 binding.accountActionButton.text = "绑定此设备"
                 binding.accountActionButton.isEnabled = true
@@ -358,7 +356,6 @@ class MainActivity : AppCompatActivity() {
                 binding.deviceNameLayout.visibility = View.GONE
             }
         } else {
-            // State: Not Logged In
             binding.bindingStatusText.text = "登录以同步和远程控制"
             binding.accountActionButton.text = "登录 / 注册"
             binding.accountActionButton.isEnabled = true
@@ -397,6 +394,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadPreferences() {
+        val serverUrl = prefs.getString(KEY_SERVER_URL, AppConfig.BASE_URL)
+        binding.serverAddressEditText.setText(serverUrl)
+
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         binding.storageLocationGroup.check(if (isPublic) R.id.radio_public_storage else R.id.radio_private_storage)
 
@@ -486,6 +486,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val PREFS_NAME = "CameraPrefs"
+        const val KEY_SERVER_URL = "server_url"
         const val KEY_STORAGE_IS_PUBLIC = "storage_is_public"
         const val KEY_CAPTURE_INTERVAL = "capture_interval"
         const val KEY_SHOW_TOAST = "show_toast"
