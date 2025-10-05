@@ -1,5 +1,9 @@
 <resources>
+    <!-- Base application theme. -->
     <style name="Base.Theme.BackgroundCamera" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 【新增】告诉系统在浅色主题下使用深色的状态栏图标 -->
+        <item name="android:windowLightStatusBar">true</item>
     </style>
+
     <style name="Theme.BackgroundCamera" parent="Base.Theme.BackgroundCamera" />
 </resources>

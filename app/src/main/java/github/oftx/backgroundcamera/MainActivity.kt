@@ -21,6 +21,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.children
 import androidx.core.widget.doOnTextChanged
 import androidx.lifecycle.lifecycleScope
@@ -97,11 +99,25 @@ class MainActivity : AppCompatActivity() {
         sessionManager = SessionManager(this)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // 【新增】处理边到边显示的边衬距问题
+        applyWindowInsets()
+
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         LogManager.addLog("[UI] MainActivity created.")
         setupListeners()
         setupCameraSpinner()
         loadPreferences()
+    }
+
+    // 【新增】处理窗口边衬距的方法
+    private fun applyWindowInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            // 将系统栏的高度应用为根视图的内边距
+            view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
     }
 
     override fun onResume() {
