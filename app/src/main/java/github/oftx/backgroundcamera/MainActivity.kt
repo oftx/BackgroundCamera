@@ -2,9 +2,7 @@ package github.oftx.backgroundcamera
 
 import android.Manifest
 import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.content.SharedPreferences
+import android.content.*
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -26,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.children
 import androidx.core.widget.doOnTextChanged
 import androidx.lifecycle.lifecycleScope
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.gson.Gson
 import github.oftx.backgroundcamera.databinding.ActivityMainBinding
 import github.oftx.backgroundcamera.network.ApiService
@@ -52,9 +51,17 @@ class MainActivity : AppCompatActivity() {
 
     private val nameUpdateHandler = Handler(Looper.getMainLooper())
     private var nameUpdateRunnable: Runnable? = null
-
-    // 【新增】用于缓存当前设备名称，以防止不必要的更新
     private var currentDeviceName: String? = null
+
+    private val wsStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == CameraService.ACTION_WS_STATUS_UPDATE) {
+                val statusString = intent.getStringExtra(CameraService.EXTRA_WS_STATUS)
+                val status = WsConnectionStatus.valueOf(statusString ?: WsConnectionStatus.DISCONNECTED.name)
+                updateConnectionStatusUI(status)
+            }
+        }
+    }
 
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -96,6 +103,18 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateUI()
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            wsStatusReceiver, IntentFilter(CameraService.ACTION_WS_STATUS_UPDATE)
+        )
+        val requestStatusIntent = Intent(this, CameraService::class.java).apply {
+            action = CameraService.ACTION_REQUEST_WS_STATUS
+        }
+        startService(requestStatusIntent)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(wsStatusReceiver)
     }
 
     private fun setupListeners() {
@@ -123,8 +142,12 @@ class MainActivity : AppCompatActivity() {
         binding.logoutButton.setOnClickListener {
             LogManager.addLog("[Auth] User logged out.")
             sessionManager.logout()
-            if (CameraService.isRunning) {
-                restartService()
+            // If monitoring was active, send command to stop it
+            if (CameraService.isMonitoringActive) {
+                val stopIntent = Intent(this, CameraService::class.java).apply {
+                    action = CameraService.ACTION_STOP_MONITORING
+                }
+                startService(stopIntent)
             }
             updateUI()
         }
@@ -133,11 +156,18 @@ class MainActivity : AppCompatActivity() {
             showUnbindConfirmationDialog()
         }
 
+        binding.reconnectButton.setOnClickListener {
+            val reconnectIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_RECONNECT_WS
+            }
+            startService(reconnectIntent)
+            updateConnectionStatusUI(WsConnectionStatus.CONNECTING)
+        }
+
         binding.deviceNameEditText.doOnTextChanged { text, _, _, _ ->
             nameUpdateRunnable?.let { nameUpdateHandler.removeCallbacks(it) }
             nameUpdateRunnable = Runnable {
                 val newName = text.toString().trim()
-                // 【修改】核心修复：仅当名称实际发生改变时才触发更新
                 if (newName.isNotEmpty() && newName != currentDeviceName) {
                     updateDeviceName(newName)
                 }
@@ -212,17 +242,21 @@ class MainActivity : AppCompatActivity() {
         if (!sessionManager.isLoggedIn()) return
         val deviceId = sessionManager.getDeviceId()
         val jwt = sessionManager.getUserJwt()!!
-
         lifecycleScope.launch {
             try {
+                // Also stop monitoring if it's active
+                if (CameraService.isMonitoringActive) {
+                    val stopIntent = Intent(this@MainActivity, CameraService::class.java).apply {
+                        action = CameraService.ACTION_STOP_MONITORING
+                    }
+                    startService(stopIntent)
+                }
+
                 val response = apiService.unbindDevice("Bearer $jwt", deviceId)
                 if (response.isSuccessful) {
                     LogManager.addLog("[Binding] Device unbind successful.")
                     Toast.makeText(this@MainActivity, "设备已解绑", Toast.LENGTH_SHORT).show()
                     sessionManager.logout()
-                    if (CameraService.isRunning) {
-                        restartService()
-                    }
                     updateUI()
                 } else {
                     val errorMsg = parseError(response)
@@ -242,13 +276,11 @@ class MainActivity : AppCompatActivity() {
         if (!sessionManager.isDeviceBound()) return
         val deviceId = sessionManager.getDeviceId()
         val jwt = sessionManager.getUserJwt()!!
-
         lifecycleScope.launch {
             try {
                 val response = apiService.getDeviceDetails("Bearer $jwt", deviceId)
                 if (response.isSuccessful && response.body() != null) {
                     val deviceName = response.body()!!.name
-                    // 【修改】更新缓存的名称
                     this@MainActivity.currentDeviceName = deviceName
                     binding.deviceNameEditText.setText(deviceName)
                 } else {
@@ -265,13 +297,11 @@ class MainActivity : AppCompatActivity() {
         if (!sessionManager.isDeviceBound()) return
         val deviceId = sessionManager.getDeviceId()
         val jwt = sessionManager.getUserJwt()!!
-
         lifecycleScope.launch {
             try {
                 val request = UpdateDeviceNameRequestDto(newName)
                 val response = apiService.updateDeviceName("Bearer $jwt", deviceId, request)
                 if (response.isSuccessful) {
-                    // 【修改】成功更新后，同步更新缓存的名称
                     this@MainActivity.currentDeviceName = newName
                     LogManager.addLog("[Device] Device name updated to '$newName'")
                     Toast.makeText(this@MainActivity, "名称已更新", Toast.LENGTH_SHORT).show()
@@ -289,7 +319,6 @@ class MainActivity : AppCompatActivity() {
     private fun bindDevice() {
         val deviceId = sessionManager.getDeviceId()
         val jwt = sessionManager.getUserJwt()!!
-
         lifecycleScope.launch {
             try {
                 val response = apiService.bindDevice("Bearer $jwt", deviceId)
@@ -299,7 +328,8 @@ class MainActivity : AppCompatActivity() {
                     LogManager.addLog("[Binding] Device bound successfully!")
                     Toast.makeText(this@MainActivity, "设备绑定成功!", Toast.LENGTH_SHORT).show()
                     updateUI()
-                    if (CameraService.isRunning) {
+                    // Re-check if monitoring was active and restart it
+                    if (CameraService.isMonitoringActive) {
                         restartService()
                     }
                 } else {
@@ -340,9 +370,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateUI() {
-        val isServiceRunning = CameraService.isRunning
-        binding.statusText.text = if (isServiceRunning) "服务正在运行" else "服务已停止"
-        binding.toggleServiceButton.text = if (isServiceRunning) "停止监控服务" else "启动监控服务"
+        // 【修改】UI状态现在依赖于 isMonitoringActive
+        val isMonitoring = CameraService.isMonitoringActive
+        binding.statusText.text = if (isMonitoring) "服务正在运行" else "服务已停止"
+        binding.toggleServiceButton.text = if (isMonitoring) "停止监控服务" else "启动监控服务"
 
         if (sessionManager.isLoggedIn()) {
             if (sessionManager.isDeviceBound()) {
@@ -350,6 +381,7 @@ class MainActivity : AppCompatActivity() {
                 binding.accountActionButton.visibility = View.GONE
                 binding.boundActionsLayout.visibility = View.VISIBLE
                 binding.deviceNameLayout.visibility = View.VISIBLE
+                binding.connectionStatusLayout.visibility = View.VISIBLE
                 fetchAndDisplayDeviceName()
             } else {
                 binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
@@ -358,6 +390,7 @@ class MainActivity : AppCompatActivity() {
                 binding.accountActionButton.visibility = View.VISIBLE
                 binding.boundActionsLayout.visibility = View.GONE
                 binding.deviceNameLayout.visibility = View.GONE
+                binding.connectionStatusLayout.visibility = View.GONE
             }
         } else {
             binding.bindingStatusText.text = "登录以同步和远程控制"
@@ -366,17 +399,44 @@ class MainActivity : AppCompatActivity() {
             binding.accountActionButton.visibility = View.VISIBLE
             binding.boundActionsLayout.visibility = View.GONE
             binding.deviceNameLayout.visibility = View.GONE
+            binding.connectionStatusLayout.visibility = View.GONE
+        }
+    }
+
+    private fun updateConnectionStatusUI(status: WsConnectionStatus) {
+        when (status) {
+            WsConnectionStatus.CONNECTED -> {
+                binding.connectionStatusText.text = "网络状态: 已连接"
+                binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, R.color.green_700))
+                binding.reconnectButton.visibility = View.GONE
+            }
+            WsConnectionStatus.CONNECTING -> {
+                binding.connectionStatusText.text = "网络状态: 连接中..."
+                binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.darker_gray))
+                binding.reconnectButton.visibility = View.GONE
+            }
+            WsConnectionStatus.DISCONNECTED -> {
+                binding.connectionStatusText.text = "网络状态: 已断开"
+                binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, com.google.android.material.R.color.design_default_color_error))
+                binding.reconnectButton.visibility = View.VISIBLE
+            }
         }
     }
 
     private fun restartService() {
-        stopService(Intent(this, CameraService::class.java))
+        val stopIntent = Intent(this, CameraService::class.java).apply {
+            action = CameraService.ACTION_STOP_MONITORING
+        }
+        startService(stopIntent)
+
         binding.root.postDelayed({
-            val serviceIntent = Intent(this, CameraService::class.java)
+            val startIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_START_MONITORING
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
+                startForegroundService(startIntent)
             } else {
-                startService(serviceIntent)
+                startService(startIntent)
             }
         }, 500)
     }
@@ -387,7 +447,6 @@ class MainActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, cameraNames)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.cameraSpinner.adapter = adapter
-
         val savedCameraId = prefs.getString(KEY_SELECTED_CAMERA_ID, null)
         if (savedCameraId != null) {
             val savedIndex = cameraList.indexOfFirst { it.cameraId == savedCameraId }
@@ -400,19 +459,14 @@ class MainActivity : AppCompatActivity() {
     private fun loadPreferences() {
         val serverUrl = prefs.getString(KEY_SERVER_URL, AppConfig.BASE_URL)
         binding.serverAddressEditText.setText(serverUrl)
-
         val isPublic = prefs.getBoolean(KEY_STORAGE_IS_PUBLIC, false)
         binding.storageLocationGroup.check(if (isPublic) R.id.radio_public_storage else R.id.radio_private_storage)
-
         val interval = prefs.getInt(KEY_CAPTURE_INTERVAL, DEFAULT_INTERVAL_SECONDS)
         binding.intervalEditText.setText(interval.toString())
-
         binding.toastSwitch.isChecked = prefs.getBoolean(KEY_SHOW_TOAST, true)
-
         val autoRotate = prefs.getBoolean(KEY_AUTO_ROTATE, true)
         binding.autoRotateSwitch.isChecked = autoRotate
         updateForcedOrientationGroupState(autoRotate)
-
         val forcedOrientation = prefs.getString(KEY_FORCED_ORIENTATION, VALUE_ORIENTATION_PORTRAIT)
         binding.forcedOrientationGroup.check(when (forcedOrientation) {
             VALUE_ORIENTATION_PORTRAIT -> R.id.radio_force_portrait
@@ -448,6 +502,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 【核心修改】现在发送明确的启动/停止Action
     private fun toggleService() {
         if (!isBatteryOptimizationIgnored()) {
             Toast.makeText(this, "请先禁用电池优化", Toast.LENGTH_LONG).show()
@@ -463,9 +518,11 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().putInt(KEY_CAPTURE_INTERVAL, interval).apply()
 
         val serviceIntent = Intent(this, CameraService::class.java)
-        if (CameraService.isRunning) {
-            stopService(serviceIntent)
+        if (CameraService.isMonitoringActive) {
+            serviceIntent.action = CameraService.ACTION_STOP_MONITORING
+            startService(serviceIntent)
         } else {
+            serviceIntent.action = CameraService.ACTION_START_MONITORING
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
             } else {

@@ -7,6 +7,7 @@ import android.os.*
 import android.util.Log
 import android.view.OrientationEventListener
 import androidx.core.app.NotificationCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import github.oftx.backgroundcamera.network.AppConfig
 import github.oftx.backgroundcamera.network.dto.CommandPayload
 import github.oftx.backgroundcamera.network.dto.DeviceStatus
@@ -23,16 +24,29 @@ class CameraService : Service() {
     private lateinit var orientationEventListener: OrientationEventListener
     private lateinit var sessionManager: SessionManager
     private var webSocketManager: WebSocketManager? = null
+    private var currentWsStatus: WsConnectionStatus = WsConnectionStatus.DISCONNECTED
 
     companion object {
         const val NOTIFICATION_ID = 101
         const val CHANNEL_ID = "CameraServiceChannel"
         const val ALARM_REQUEST_CODE = 102
-        const val ACTION_SETTINGS_UPDATED = "ACTION_SETTINGS_UPDATED"
 
+        // --- Action Constants ---
+        const val ACTION_START_MONITORING = "github.oftx.backgroundcamera.ACTION_START_MONITORING"
+        const val ACTION_STOP_MONITORING = "github.oftx.backgroundcamera.ACTION_STOP_MONITORING"
+        const val ACTION_SETTINGS_UPDATED = "github.oftx.backgroundcamera.ACTION_SETTINGS_UPDATED"
+        const val ACTION_WS_STATUS_UPDATE = "github.oftx.backgroundcamera.WS_STATUS_UPDATE"
+        const val EXTRA_WS_STATUS = "EXTRA_WS_STATUS"
+        const val ACTION_REQUEST_WS_STATUS = "github.oftx.backgroundcamera.REQUEST_WS_STATUS"
+        const val ACTION_RECONNECT_WS = "github.oftx.backgroundcamera.ACTION_RECONNECT_WS"
+
+        // --- State Variables ---
         @Volatile
-        var isRunning = false
+        var isRunning = false // Indicates if the service object exists
+        @Volatile
+        var isMonitoringActive = false // Indicates if the capture alarm is scheduled
 
+        // 【修正】将 currentDeviceRotation 定义移回此处
         @Volatile
         var currentDeviceRotation: Int = 0
     }
@@ -42,9 +56,7 @@ class CameraService : Service() {
         isRunning = true
         sessionManager = SessionManager(this)
         Log.d("CameraService", "Service Created")
-
         setupWebSocket()
-
         orientationEventListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(orientation: Int) {
                 if (orientation == ORIENTATION_UNKNOWN) return
@@ -62,21 +74,25 @@ class CameraService : Service() {
         }
     }
 
-    // 现在动态读取URL并创建WebSocketManager
     private fun setupWebSocket() {
         val deviceId = sessionManager.getDeviceId()
         if (sessionManager.isDeviceBound()) {
-            // Disconnect any existing connection
             webSocketManager?.disconnect()
-
-            // Get URL from preferences
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             val baseUrl = prefs.getString(MainActivity.KEY_SERVER_URL, AppConfig.BASE_URL) ?: AppConfig.BASE_URL
             val webSocketUrl = baseUrl.replace("http://", "ws://")
                 .replace("https://", "wss://")
                 .removeSuffix("/") + "/ws/websocket"
 
-            webSocketManager = WebSocketManager(deviceId, webSocketUrl) { command: CommandPayload ->
+            val statusListener = ConnectionStatusListener { status ->
+                currentWsStatus = status
+                val intent = Intent(ACTION_WS_STATUS_UPDATE).apply {
+                    putExtra(EXTRA_WS_STATUS, status.name)
+                }
+                LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+            }
+
+            webSocketManager = WebSocketManager(deviceId, webSocketUrl, statusListener) { command: CommandPayload ->
                 handleRemoteCommand(command.command)
             }
             webSocketManager?.connect()
@@ -84,6 +100,7 @@ class CameraService : Service() {
             Log.w("CameraService", "Device is not bound, WebSocket will not connect.")
             webSocketManager?.disconnect()
             webSocketManager = null
+            currentWsStatus = WsConnectionStatus.DISCONNECTED
         }
     }
 
@@ -97,7 +114,6 @@ class CameraService : Service() {
                     "BackgroundCamera::RemoteCommandWakeLock"
                 )
                 wakeLock.acquire(20 * 1000L)
-
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         CaptureManager.performCapture(this@CameraService)
@@ -111,25 +127,55 @@ class CameraService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("CameraService", "Service Started with action: ${intent?.action}")
+        Log.d("CameraService", "Service command received with action: ${intent?.action}")
 
-        if (intent?.action == ACTION_SETTINGS_UPDATED) {
-            // 如果设置更新，重新设置WebSocket（它可能会使用新的URL）
-            setupWebSocket()
-            sendStatusUpdate()
-            return START_STICKY
+        // 【核心修改】所有操作都由显式Action驱动
+        when (intent?.action) {
+            ACTION_START_MONITORING -> {
+                if (!isMonitoringActive) {
+                    isMonitoringActive = true
+                    Log.i("CameraService", "Monitoring started.")
+                    createNotificationChannel()
+                    val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                        .setContentTitle(getString(R.string.notification_title))
+                        .setContentText(getString(R.string.notification_text))
+                        .setSmallIcon(R.drawable.ic_camera_notification)
+                        .build()
+                    startForeground(NOTIFICATION_ID, notification)
+                    scheduleNextCapture()
+                    sendStatusUpdate()
+                }
+            }
+            ACTION_STOP_MONITORING -> {
+                if (isMonitoringActive) {
+                    isMonitoringActive = false
+                    Log.i("CameraService", "Monitoring stopped.")
+                    cancelAlarm()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    sendStatusUpdate() // Send a final status update
+                    stopSelf() // Stop the service itself
+                }
+            }
+            ACTION_SETTINGS_UPDATED -> {
+                setupWebSocket()
+                sendStatusUpdate()
+            }
+            ACTION_RECONNECT_WS -> {
+                Log.d("CameraService", "Received reconnect command.")
+                webSocketManager?.connect()
+            }
+            ACTION_REQUEST_WS_STATUS -> {
+                Log.d("CameraService", "Received status request, broadcasting current status.")
+                val statusIntent = Intent(ACTION_WS_STATUS_UPDATE).apply {
+                    putExtra(EXTRA_WS_STATUS, currentWsStatus.name)
+                }
+                LocalBroadcastManager.getInstance(this).sendBroadcast(statusIntent)
+            }
+            else -> {
+                // If service is restarted by system with a null intent, do nothing.
+                Log.w("CameraService", "Service started with null or unknown intent action. No action taken.")
+            }
         }
-
-        createNotificationChannel()
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text))
-            .setSmallIcon(R.drawable.ic_camera_notification)
-            .build()
-        startForeground(NOTIFICATION_ID, notification)
-
-        scheduleNextCapture()
-        sendStatusUpdate()
 
         return START_STICKY
     }
@@ -137,7 +183,7 @@ class CameraService : Service() {
     private fun sendStatusUpdate() {
         val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val status = DeviceStatus(
-            isServiceRunning = isRunning,
+            isServiceRunning = isMonitoringActive, // Report monitoring status
             captureInterval = prefs.getInt(
                 MainActivity.KEY_CAPTURE_INTERVAL,
                 MainActivity.DEFAULT_INTERVAL_SECONDS
@@ -153,19 +199,8 @@ class CameraService : Service() {
         cancelAlarm()
         webSocketManager?.disconnect()
         orientationEventListener.disable()
+        isMonitoringActive = false // Reset states
         isRunning = false
-        // Send a final status update indicating service is stopped
-        val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-        val status = DeviceStatus(
-            isServiceRunning = false, // Explicitly set to false
-            captureInterval = prefs.getInt(
-                MainActivity.KEY_CAPTURE_INTERVAL,
-                MainActivity.DEFAULT_INTERVAL_SECONDS
-            ),
-            selectedCameraId = prefs.getString(MainActivity.KEY_SELECTED_CAMERA_ID, null)
-        )
-        val statusUpdate = DeviceStatusUpdate(sessionManager.getDeviceId(), status)
-        webSocketManager?.sendStatusUpdate(statusUpdate)
         Log.d("CameraService", "Service Destroyed")
     }
 
@@ -174,7 +209,6 @@ class CameraService : Service() {
         val intervalSeconds =
             prefs.getInt(MainActivity.KEY_CAPTURE_INTERVAL, MainActivity.DEFAULT_INTERVAL_SECONDS)
         val intervalMillis = intervalSeconds * 1000L
-
         alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val intent = Intent(this, CameraBroadcastReceiver::class.java)
         alarmIntent = PendingIntent.getBroadcast(
@@ -183,9 +217,7 @@ class CameraService : Service() {
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
         val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMillis
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             alarmManager.setExactAndAllowWhileIdle(
                 AlarmManager.ELAPSED_REALTIME_WAKEUP,

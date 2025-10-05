@@ -11,9 +11,22 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+// 【新增】定义连接状态的枚举
+enum class WsConnectionStatus {
+    CONNECTING,
+    CONNECTED,
+    DISCONNECTED
+}
+
+// 【新增】定义状态回调接口
+fun interface ConnectionStatusListener {
+    fun onStatusChanged(status: WsConnectionStatus)
+}
+
 class WebSocketManager(
     private val deviceId: String,
-    private val webSocketUrl: String, // URL现在是动态传入的
+    private val webSocketUrl: String,
+    private val statusListener: ConnectionStatusListener, // 【修改】接收状态监听器
     private val onCommandReceived: (CommandPayload) -> Unit
 ) {
     private val TAG = "WebSocketManager"
@@ -36,7 +49,8 @@ class WebSocketManager(
             LogManager.addLog("[WS] Connect called but already connected or connecting.")
             return
         }
-        // 使用动态传入的webSocketUrl
+        // 【修改】在尝试连接时立即通知状态
+        statusListener.onStatusChanged(WsConnectionStatus.CONNECTING)
         val request = Request.Builder().url(webSocketUrl).build()
         LogManager.addLog("[WS] Attempting to connect to $webSocketUrl")
         webSocket = client.newWebSocket(request, WebSocketListenerImpl())
@@ -52,6 +66,8 @@ class WebSocketManager(
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         isConnected.set(false)
+        // Manually trigger status update on disconnect
+        statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
     }
 
     fun sendStatusUpdate(statusUpdate: DeviceStatusUpdate) {
@@ -101,6 +117,8 @@ class WebSocketManager(
                     stopReconnecting()
                     reconnectAttempts = 0
                     LogManager.addLog("[WS] STOMP CONNECTED successfully.")
+                    // 【修改】连接成功时通知状态
+                    statusListener.onStatusChanged(WsConnectionStatus.CONNECTED)
 
                     val subId = "sub-0"
                     val destination = "/queue/device/command/$deviceId"
@@ -135,18 +153,24 @@ class WebSocketManager(
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             LogManager.addLog("[WS] Connection closing: $code - $reason")
             isConnected.set(false)
+            // 【修改】连接关闭中通知状态
+            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
             webSocket.close(1000, null)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             LogManager.addLog("[WS] Connection closed: $code - $reason")
             isConnected.set(false)
+            // 【修改】连接已关闭时通知状态
+            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
             startReconnecting()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             LogManager.addLog("[WS] Connection failure: ${t.message}")
             isConnected.set(false)
+            // 【修改】连接失败时通知状态
+            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
             startReconnecting()
         }
     }
