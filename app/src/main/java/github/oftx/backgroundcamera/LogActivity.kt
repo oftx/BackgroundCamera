@@ -30,6 +30,16 @@ class LogActivity : AppCompatActivity() {
         binding.copyLogsButton.setOnClickListener {
             copyLogsToClipboard()
         }
+
+        // 【新增】为清除按钮设置点击监听器
+        binding.clearLogsButton.setOnClickListener {
+            // 1. 调用LogManager清空日志
+            LogManager.clearLogs()
+            // 2. 重新加载日志内容到TextView (此时会显示"Logs cleared."这一条)
+            binding.logTextView.text = LogManager.getLogs()
+            // 3. 给用户反馈
+            Toast.makeText(this, "All logs have been cleared!", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun copyLogsToClipboard() {

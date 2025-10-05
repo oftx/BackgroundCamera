@@ -8,27 +8,49 @@
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_above="@id/copy_logs_button"
-        android:background="#F5F5F5">
+        android:layout_above="@id/bottom_actions_layout"
+        android:background="?attr/colorSurfaceContainer">
 
         <TextView
             android:id="@+id/log_text_view"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:padding="16dp"
-            android:textColor="#333333"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="12sp"
             android:typeface="monospace"
             android:textIsSelectable="true"
             tools:text="12:34:56: Log entry 1...\n12:34:57: Log entry 2..."/>
     </ScrollView>
 
-    <Button
-        android:id="@+id/copy_logs_button"
+    <LinearLayout
+        android:id="@+id/bottom_actions_layout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
-        android:text="Copy All Logs to Clipboard"
-        android:layout_margin="8dp"/>
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <Button
+            android:id="@+id/clear_logs_button"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_margin="8dp"
+            android:text="Clear All Logs"
+            android:textColor="?attr/colorError" />
+
+
+        <Button
+            android:id="@+id/copy_logs_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_margin="8dp"
+            android:text="Copy All Logs" />
+
+    </LinearLayout>
 
 </RelativeLayout>
