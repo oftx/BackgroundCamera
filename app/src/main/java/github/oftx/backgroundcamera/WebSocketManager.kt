@@ -17,13 +17,14 @@ enum class WsConnectionStatus {
     DISCONNECTED
 }
 
+// 【修改】移除函数式接口抽象方法参数的默认值
 fun interface ConnectionStatusListener {
-    fun onStatusChanged(status: WsConnectionStatus)
+    fun onStatusChanged(status: WsConnectionStatus, reconnectDelaySeconds: Int)
 }
 
 class WebSocketManager(
     private val deviceId: String,
-    private val deviceToken: String?, // 【新增】接收设备Token
+    private val deviceToken: String?,
     private val webSocketUrl: String,
     private val statusListener: ConnectionStatusListener,
     private val onCommandReceived: (CommandPayload) -> Unit
@@ -38,16 +39,19 @@ class WebSocketManager(
 
     private var webSocket: WebSocket? = null
     private val isConnected = AtomicBoolean(false)
+    private val isManuallyDisconnected = AtomicBoolean(false)
     private val NULL_CHAR = "\u0000"
 
     private var reconnectScheduler: ScheduledExecutorService? = null
     private var reconnectAttempts = 0
 
     fun connect() {
-        // 【新增】安全检查：如果token为空，则无法连接
+        isManuallyDisconnected.set(false)
+
         if (deviceToken.isNullOrEmpty()) {
             LogManager.addLog("[WS] Connection aborted: Device token is null or empty.")
-            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
+            // 【修改】显式传递第二个参数
+            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, 0)
             return
         }
 
@@ -55,13 +59,15 @@ class WebSocketManager(
             LogManager.addLog("[WS] Connect called but already connected or connecting.")
             return
         }
-        statusListener.onStatusChanged(WsConnectionStatus.CONNECTING)
+        // 【修改】显式传递第二个参数
+        statusListener.onStatusChanged(WsConnectionStatus.CONNECTING, 0)
         val request = Request.Builder().url(webSocketUrl).build()
         LogManager.addLog("[WS] Attempting to connect to $webSocketUrl")
         webSocket = client.newWebSocket(request, WebSocketListenerImpl())
     }
 
     fun disconnect() {
+        isManuallyDisconnected.set(true)
         stopReconnecting()
         if (isConnected.get()) {
             val disconnectFrame = "DISCONNECT\nreceipt:disconnect-123\n\n$NULL_CHAR"
@@ -71,7 +77,8 @@ class WebSocketManager(
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         isConnected.set(false)
-        statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
+        // 【修改】显式传递第二个参数
+        statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, 0)
     }
 
     fun sendStatusUpdate(statusUpdate: DeviceStatusUpdate) {
@@ -90,28 +97,41 @@ class WebSocketManager(
 
         reconnectScheduler = Executors.newSingleThreadScheduledExecutor()
         reconnectAttempts = 0
-        reconnectScheduler?.scheduleAtFixedRate({
-            if (!isConnected.get()) {
-                reconnectAttempts++
-                val delay = (5.coerceAtMost(reconnectAttempts) * 1000).toLong()
-                LogManager.addLog("[WS] Scheduling reconnect attempt #${reconnectAttempts}...")
+
+        scheduleNextAttempt()
+    }
+
+    private fun scheduleNextAttempt() {
+        if (reconnectScheduler?.isShutdown == true) return
+
+        reconnectAttempts++
+        val delaySeconds = 5L.coerceAtMost(reconnectAttempts.toLong())
+
+        LogManager.addLog("[WS] Scheduling reconnect attempt #${reconnectAttempts} in ${delaySeconds}s...")
+
+        // 这里已经正确传递了第二个参数，无需修改
+        statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, delaySeconds.toInt())
+
+        reconnectScheduler?.schedule({
+            if (!isConnected.get() && !isManuallyDisconnected.get()) {
+                LogManager.addLog("[WS] Executing reconnect attempt #${reconnectAttempts}.")
                 webSocket = null
                 connect()
-                Thread.sleep(delay)
+                scheduleNextAttempt()
             }
-        }, 5000, 5000, TimeUnit.MILLISECONDS)
+        }, delaySeconds, TimeUnit.SECONDS)
     }
+
 
     private fun stopReconnecting() {
         reconnectScheduler?.shutdownNow()
         reconnectScheduler = null
+        reconnectAttempts = 0
     }
 
     private inner class WebSocketListenerImpl : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             LogManager.addLog("[WS] Connection opened. Sending CONNECT frame with device credentials.")
-
-            // 【核心修改】在CONNECT帧中添加设备ID和Token作为Header
             val connectFrame = """
             CONNECT
             accept-version:1.2,1.1,1.0
@@ -121,7 +141,6 @@ class WebSocketManager(
 
             $NULL_CHAR
             """.trimIndent()
-
             webSocket.send(connectFrame)
         }
 
@@ -130,21 +149,15 @@ class WebSocketManager(
                 text.startsWith("CONNECTED") -> {
                     isConnected.set(true)
                     stopReconnecting()
-                    reconnectAttempts = 0
                     LogManager.addLog("[WS] STOMP CONNECTED successfully.")
-                    statusListener.onStatusChanged(WsConnectionStatus.CONNECTED)
+                    // 【修改】显式传递第二个参数
+                    statusListener.onStatusChanged(WsConnectionStatus.CONNECTED, 0)
 
                     val subId = "sub-0"
                     val destination = "/queue/device/command/$deviceId"
                     val subscribeFrame = "SUBSCRIBE\nid:$subId\ndestination:$destination\n\n$NULL_CHAR"
                     webSocket.send(subscribeFrame)
                     LogManager.addLog("[WS] Subscribed to command topic.")
-
-                    // Device registration is now handled by the connect frame, but we can keep this for compatibility if needed.
-                    // val regPayload = gson.toJson(DeviceRegistration(deviceId))
-                    // val registerFrame = "SEND\ndestination:/app/device/register\ncontent-type:application/json\n\n$regPayload$NULL_CHAR"
-                    // webSocket.send(registerFrame)
-                    // LogManager.addLog("[WS] Sent device registration.")
                 }
                 text.startsWith("MESSAGE") -> {
                     val bodyIndex = text.indexOf("\n\n")
@@ -168,22 +181,31 @@ class WebSocketManager(
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             LogManager.addLog("[WS] Connection closing: $code - $reason")
             isConnected.set(false)
-            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
+            // 【修改】显式传递第二个参数
+            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, 0)
             webSocket.close(1000, null)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             LogManager.addLog("[WS] Connection closed: $code - $reason")
             isConnected.set(false)
-            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
-            startReconnecting()
+            if (!isManuallyDisconnected.get()) {
+                startReconnecting()
+            } else {
+                // 【修改】显式传递第二个参数
+                statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, 0)
+            }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             LogManager.addLog("[WS] Connection failure: ${t.message}")
             isConnected.set(false)
-            statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED)
-            startReconnecting()
+            if (!isManuallyDisconnected.get()) {
+                startReconnecting()
+            } else {
+                // 【修改】显式传递第二个参数
+                statusListener.onStatusChanged(WsConnectionStatus.DISCONNECTED, 0)
+            }
         }
     }
 }

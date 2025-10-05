@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -55,15 +56,47 @@ class MainActivity : AppCompatActivity() {
     private var nameUpdateRunnable: Runnable? = null
     private var currentDeviceName: String? = null
 
-    // Cache the last known WS status to help update UI correctly
+    private var countdownTimer: CountDownTimer? = null
+
     private var lastWsStatus: WsConnectionStatus? = null
 
+    // 【修改】重构广播接收器以修复Bug并实现新功能
     private val wsStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == CameraService.ACTION_WS_STATUS_UPDATE) {
-                val statusString = intent.getStringExtra(CameraService.EXTRA_WS_STATUS)
-                val status = WsConnectionStatus.valueOf(statusString ?: WsConnectionStatus.DISCONNECTED.name)
-                lastWsStatus = status
+            if (intent?.action != CameraService.ACTION_WS_STATUS_UPDATE) return
+
+            val statusString = intent.getStringExtra(CameraService.EXTRA_WS_STATUS)
+            val status = WsConnectionStatus.valueOf(statusString ?: WsConnectionStatus.DISCONNECTED.name)
+            val delay = intent.getIntExtra(CameraService.EXTRA_WS_RECONNECT_DELAY, 0)
+
+            lastWsStatus = status
+
+            // 【核心修复】在处理任何新状态前，先彻底清理旧的倒计时器
+            countdownTimer?.cancel()
+            countdownTimer = null
+
+            if (status == WsConnectionStatus.DISCONNECTED && delay > 0) {
+                // 网络断开，并收到了重连延迟时间，启动UI倒计时
+                countdownTimer = object : CountDownTimer(delay * 1000L, 1000) {
+                    override fun onTick(millisUntilFinished: Long) {
+                        val secondsLeft = millisUntilFinished / 1000
+                        binding.connectionStatusText.text = "重连中 (${secondsLeft}s)..."
+                        binding.connectionStatusText.setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.darker_gray))
+                        binding.reconnectButton.visibility = View.GONE
+                        binding.disconnectWsButton.visibility = View.GONE
+                        // 【新增】显示“立即重连”按钮
+                        binding.reconnectNowButton.visibility = View.VISIBLE
+                    }
+
+                    override fun onFinish() {
+                        countdownTimer = null // 倒计时结束，清空实例
+                        binding.connectionStatusText.text = "连接中..."
+                        lastWsStatus = WsConnectionStatus.CONNECTING
+                        updateCombinedStatusUI()
+                    }
+                }.start()
+            } else {
+                // 对于其他所有情况（手动断开、连接中、已连接），直接更新UI
                 updateCombinedStatusUI()
             }
         }
@@ -100,7 +133,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // 【新增】处理边到边显示的边衬距问题
         applyWindowInsets()
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -110,11 +142,9 @@ class MainActivity : AppCompatActivity() {
         loadPreferences()
     }
 
-    // 【新增】处理窗口边衬距的方法
     private fun applyWindowInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, windowInsets ->
             val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
-            // 将系统栏的高度应用为根视图的内边距
             view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
             WindowInsetsCompat.CONSUMED
         }
@@ -126,7 +156,6 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).registerReceiver(
             wsStatusReceiver, IntentFilter(CameraService.ACTION_WS_STATUS_UPDATE)
         )
-        // If service is expected to be running, request its current status
         if (sessionManager.isDeviceBound()) {
             val requestStatusIntent = Intent(this, CameraService::class.java).apply {
                 action = CameraService.ACTION_REQUEST_WS_STATUS
@@ -137,6 +166,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        countdownTimer?.cancel()
         LocalBroadcastManager.getInstance(this).unregisterReceiver(wsStatusReceiver)
     }
 
@@ -164,7 +194,6 @@ class MainActivity : AppCompatActivity() {
 
         binding.logoutButton.setOnClickListener {
             LogManager.addLog("[Auth] User logged out.")
-            // Send shutdown command to the service
             val shutdownIntent = Intent(this, CameraService::class.java).apply {
                 action = CameraService.ACTION_SHUTDOWN
             }
@@ -177,6 +206,21 @@ class MainActivity : AppCompatActivity() {
             showUnbindConfirmationDialog()
         }
 
+        // 【新增】为“立即重连”按钮添加监听器
+        binding.reconnectNowButton.setOnClickListener {
+            countdownTimer?.cancel()
+            countdownTimer = null
+
+            val reconnectIntent = Intent(this, CameraService::class.java).apply {
+                action = CameraService.ACTION_RECONNECT_WS
+            }
+            startService(reconnectIntent)
+
+            // 提供即时UI反馈
+            lastWsStatus = WsConnectionStatus.CONNECTING
+            updateCombinedStatusUI()
+        }
+
         binding.reconnectButton.setOnClickListener {
             val reconnectIntent = Intent(this, CameraService::class.java).apply {
                 action = CameraService.ACTION_RECONNECT_WS
@@ -186,7 +230,6 @@ class MainActivity : AppCompatActivity() {
             updateCombinedStatusUI()
         }
 
-        // Add listener for the new disconnect button
         binding.disconnectWsButton.setOnClickListener {
             val disconnectIntent = Intent(this, CameraService::class.java).apply {
                 action = CameraService.ACTION_DISCONNECT_WS
@@ -275,7 +318,6 @@ class MainActivity : AppCompatActivity() {
         val jwt = sessionManager.getUserJwt()!!
         lifecycleScope.launch {
             try {
-                // Send shutdown command to the service before unbinding
                 val shutdownIntent = Intent(this@MainActivity, CameraService::class.java).apply {
                     action = CameraService.ACTION_SHUTDOWN
                 }
@@ -357,7 +399,6 @@ class MainActivity : AppCompatActivity() {
                     LogManager.addLog("[Binding] Device bound successfully!")
                     Toast.makeText(this@MainActivity, "设备绑定成功!", Toast.LENGTH_SHORT).show()
 
-                    // Initialize and start the service in foreground after binding
                     val initIntent = Intent(this@MainActivity, CameraService::class.java).apply {
                         action = CameraService.ACTION_INITIALIZE
                     }
@@ -418,7 +459,7 @@ class MainActivity : AppCompatActivity() {
                 binding.deviceNameLayout.visibility = View.VISIBLE
                 binding.connectionStatusLayout.visibility = View.VISIBLE
                 fetchAndDisplayDeviceName()
-                updateCombinedStatusUI() // Update WS buttons based on current state
+                updateCombinedStatusUI()
             } else {
                 binding.bindingStatusText.text = "已登录: ${sessionManager.getUsername()}"
                 binding.accountActionButton.text = "绑定此设备"
@@ -440,7 +481,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateCombinedStatusUI() {
-        val status = lastWsStatus ?: return // If we don't know the status yet, do nothing
+        if (countdownTimer != null) {
+            // 如果倒计时器正在运行，UI由倒计时器控制，这里直接返回
+            return
+        }
+
+        val status = lastWsStatus ?: return
         val isMonitoring = CameraService.isMonitoringActive
 
         when (status) {
@@ -448,20 +494,21 @@ class MainActivity : AppCompatActivity() {
                 binding.connectionStatusText.text = "已连接"
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, R.color.green_700))
                 binding.reconnectButton.visibility = View.GONE
-                // Only show disconnect button if monitoring is NOT active
+                binding.reconnectNowButton.visibility = View.GONE
                 binding.disconnectWsButton.visibility = if (!isMonitoring) View.VISIBLE else View.GONE
             }
             WsConnectionStatus.CONNECTING -> {
                 binding.connectionStatusText.text = "连接中..."
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.darker_gray))
                 binding.reconnectButton.visibility = View.GONE
+                binding.reconnectNowButton.visibility = View.GONE
                 binding.disconnectWsButton.visibility = View.GONE
             }
             WsConnectionStatus.DISCONNECTED -> {
                 binding.connectionStatusText.text = "已断开"
                 binding.connectionStatusText.setTextColor(ContextCompat.getColor(this, com.google.android.material.R.color.design_default_color_error))
-                // Only show reconnect button if monitoring is NOT active
                 binding.reconnectButton.visibility = if (!isMonitoring) View.VISIBLE else View.GONE
+                binding.reconnectNowButton.visibility = View.GONE
                 binding.disconnectWsButton.visibility = View.GONE
             }
         }
@@ -554,7 +601,6 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
         }
-        // Use a short delay to allow service state to update, then refresh UI
         binding.root.postDelayed({
             updateUI()
             updateCombinedStatusUI()

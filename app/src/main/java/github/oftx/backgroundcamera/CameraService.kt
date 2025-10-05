@@ -36,11 +36,12 @@ class CameraService : Service() {
         const val ACTION_SHUTDOWN = "github.oftx.backgroundcamera.ACTION_SHUTDOWN"
         const val ACTION_START_MONITORING = "github.oftx.backgroundcamera.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "github.oftx.backgroundcamera.ACTION_STOP_MONITORING"
-        // 【新增】为重新调度拍照任务定义一个新的Action
         const val ACTION_SCHEDULE_NEXT_CAPTURE = "github.oftx.backgroundcamera.ACTION_SCHEDULE_NEXT_CAPTURE"
         const val ACTION_SETTINGS_UPDATED = "github.oftx.backgroundcamera.ACTION_SETTINGS_UPDATED"
         const val ACTION_WS_STATUS_UPDATE = "github.oftx.backgroundcamera.WS_STATUS_UPDATE"
         const val EXTRA_WS_STATUS = "EXTRA_WS_STATUS"
+        // 【新增】用于传递重连倒计时秒数的Extra Key
+        const val EXTRA_WS_RECONNECT_DELAY = "EXTRA_WS_RECONNECT_DELAY"
         const val ACTION_REQUEST_WS_STATUS = "github.oftx.backgroundcamera.REQUEST_WS_STATUS"
         const val ACTION_RECONNECT_WS = "github.oftx.backgroundcamera.ACTION_RECONNECT_WS"
         const val ACTION_DISCONNECT_WS = "github.oftx.backgroundcamera.ACTION_DISCONNECT_WS"
@@ -87,10 +88,12 @@ class CameraService : Service() {
                 .replace("https://", "wss://")
                 .removeSuffix("/") + "/ws/websocket"
 
-            val statusListener = ConnectionStatusListener { status ->
+            // 【修改】更新回调实现以处理新的参数
+            val statusListener = ConnectionStatusListener { status, reconnectDelaySeconds ->
                 currentWsStatus = status
                 val intent = Intent(ACTION_WS_STATUS_UPDATE).apply {
                     putExtra(EXTRA_WS_STATUS, status.name)
+                    putExtra(EXTRA_WS_RECONNECT_DELAY, reconnectDelaySeconds)
                 }
                 LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
             }
@@ -174,7 +177,6 @@ class CameraService : Service() {
                     sendStatusUpdate()
                 }
             }
-            // 【新增】处理来自广播接收器的重新调度请求
             ACTION_SCHEDULE_NEXT_CAPTURE -> {
                 if (isMonitoringActive) {
                     scheduleNextCapture()

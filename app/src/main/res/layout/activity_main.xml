@@ -82,7 +82,6 @@
             android:visibility="gone"
             tools:visibility="visible">
 
-            <!-- 【修改】标签文本固定 -->
             <TextView
                 android:id="@+id/websocket_status_label"
                 android:layout_width="wrap_content"
@@ -96,7 +95,16 @@
                 android:layout_marginEnd="8dp"
                 tools:text="已连接" />
 
-            <!-- 【新增】断开连接按钮 -->
+            <!-- 【新增】立即重连按钮 -->
+            <Button
+                android:id="@+id/reconnect_now_button"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="立即重连"
+                android:visibility="gone"
+                tools:visibility="visible"/>
+
             <Button
                 android:id="@+id/disconnect_ws_button"
                 style="@style/Widget.Material3.Button.TextButton"
